@@ -1,0 +1,63 @@
+{
+    "$schema": "https://biomejs.dev/schemas/2.2.4/schema.json",
+    "formatter": {
+        "enabled": true,
+        "formatWithErrors": false,
+        "indentStyle": "space",
+        "indentWidth": 2,
+        "lineEnding": "lf",
+        "lineWidth": 70,
+        "attributePosition": "auto"
+    },
+    "linter": {
+        "enabled": true,
+        "rules": {
+            "recommended": true,
+            "style": {
+                "noShoutyConstants": "warn",
+                "useNamingConvention": "warn"
+            },
+            "suspicious": {
+                "noExplicitAny": "error",
+                "noDuplicateElseIf": "warn"
+            },
+            "correctness": {
+                "useExhaustiveDependencies": "off"
+            },
+            "complexity": {
+                "noForEach": "warn",
+                "noExcessiveCognitiveComplexity": "warn"
+            },
+            "a11y": {
+                "noSvgWithoutTitle": "off",
+                "useKeyWithClickEvents": "off",
+                "useAltText": "off"
+            }
+        }
+    },
+    "javascript": {
+        "formatter": {
+            "jsxQuoteStyle": "single",
+            "quoteStyle": "single",
+            "quoteProperties": "asNeeded",
+            "trailingCommas": "all",
+            "semicolons": "always",
+            "arrowParentheses": "always",
+            "bracketSpacing": true,
+            "bracketSameLine": false,
+            "attributePosition": "auto"
+        }
+    },
+    "json": {
+        "formatter": {
+            "enabled": true
+        }
+    },
+    "assist": {
+        "actions": {
+            "source": {
+                "organizeImports": "on"
+            }
+        }
+    }
+}
