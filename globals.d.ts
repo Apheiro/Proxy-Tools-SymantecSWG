@@ -90,6 +90,7 @@ declare interface Checkpoints {
   'client-in': Checkpoint | null;
   'client-out': Checkpoint | null;
   'new-connection': Checkpoint | null;
+  'cache-hit': Checkpoint | null;
   'server-in': Checkpoint | null;
   'server-in-connection': Checkpoint | null;
   'server-out': Checkpoint | null;
@@ -99,6 +100,12 @@ declare interface Checkpoints {
 declare interface Checkpoint {
   elapsedMs: number;
   startMs: number;
+}
+
+declare interface Filters {
+  start?: string;
+  end?: string;
+  status?: string;
 }
 
 declare interface Transaction {

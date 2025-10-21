@@ -2,34 +2,21 @@
 /** biome-ignore-all lint/style/useNamingConvention: <> */
 'use client';
 import { useAutoAnimate } from '@formkit/auto-animate/react';
-import { useDidUpdate, useDisclosure } from '@mantine/hooks';
+import {
+  useDebouncedValue,
+  useDidUpdate,
+  useDisclosure,
+} from '@mantine/hooks';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import dayjs from 'dayjs';
-import { Filter } from 'lucide-react';
 import { useSearchParams } from 'next/navigation';
-import {
-  type Dispatch,
-  type FormEvent,
-  type SetStateAction,
-  Suspense,
-  useEffect,
-  useRef,
-  useState,
-} from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import AdvanceTransactionView from '@/components/advanceTransactionView';
+import FilterBar from '@/components/filterBar';
 import TransactionCard from '@/components/transactionCard';
-import { Button } from '@/components/ui/button';
-
-import { Input } from '@/components/ui/input';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
+import evaluatePolicyMatchesFn from '@/lib/evaluatePolicyMatches';
 import {
   deleteLocalStorage,
   getLocalStorage,
@@ -48,185 +35,17 @@ export default function Page() {
   );
 }
 
-// function filterBy() {}
-
-function isEmpty(obj: object) {
-  let isEmpty = true;
-  for (const key in obj) {
-    if (obj[key] !== '' && obj[key] !== null) {
-      isEmpty = false;
-      break;
-    }
-  }
-  return isEmpty;
-}
-
-function createFilterObj(
-  e: FormEvent<HTMLFormElement>,
-): Filters | null {
-  e.preventDefault();
-  const formData = Object.fromEntries(new FormData(e.currentTarget));
-  if (isEmpty(formData)) return null;
-  console.log('is not empty');
-  let filter: Filters = {};
-  if (formData.timePickerStart && formData.timePickerEnd) {
-    const [hourStart, minuteStart, secondStart] = (
-      formData.timePickerStart as string
-    )
-      .split(':')
-      .map(Number);
-    const [hourEnd, minuteEnd, secondEnd] = (
-      formData.timePickerEnd as string
-    )
-      .split(':')
-      .map(Number);
-
-    filter = {
-      start: dayjs()
-        .hour(hourStart)
-        .minute(minuteStart)
-        .second(secondStart)
-        .format('YYYY-MM-DD HH:mm:ss'),
-      end: dayjs()
-        .hour(hourEnd)
-        .minute(minuteEnd)
-        .second(secondEnd)
-        .format('YYYY-MM-DD HH:mm:ss'),
-    };
-  }
-  console.log(formData.status);
-  if (formData.status !== '') {
-    filter.status = formData.status as string;
-  }
-  return filter;
-}
-
-function FilterBar({
-  setFilter,
-  setSearchFilter,
-  searchFilter,
-}: {
-  setFilter: Dispatch<SetStateAction<Filters>>;
-  setSearchFilter: Dispatch<SetStateAction<string>>;
-  searchFilter: string;
-}) {
-  const [show, setShow] = useState(false);
-  const selectInputRef = useRef<HTMLInputElement>(null);
-  const [parent] = useAutoAnimate({
-    duration: 200,
-  });
-
-  return (
-    <div
-      className='flex justify-center flex-col items-center gap-3 w-full'
-      ref={parent}
-    >
-      <div className='flex justify-center items-center gap-3 w-full'>
-        <Input
-          type='search'
-          placeholder='Search'
-          className='max-w-70'
-        />
-        <Select>
-          <SelectTrigger className='w-fit'>
-            <SelectValue placeholder='By: URL ' />
-          </SelectTrigger>
-          <SelectContent defaultValue={'url'}>
-            <SelectItem value='url'>Url</SelectItem>
-            <SelectItem value='transaction'>
-              Transaction ID
-            </SelectItem>
-            <SelectItem value='user'>User</SelectItem>
-          </SelectContent>
-        </Select>
-
-        <Button
-          onClick={() => setShow(!show)}
-          variant={show ? 'default' : 'outline'}
-        >
-          <Filter />
-        </Button>
-      </div>
-      {show && (
-        <form
-          onSubmit={(e) => {
-            const filter = createFilterObj(e);
-            console.log(filter);
-            if (filter) setFilter(filter);
-          }}
-          className='flex justify-center items-center gap-3 w-full'
-        >
-          <input type='hidden' ref={selectInputRef} name='status' />
-          <Select
-            onValueChange={(v) => {
-              if (selectInputRef.current)
-                selectInputRef.current.value = v;
-            }}
-          >
-            <SelectTrigger className='w-fit' name='status'>
-              <SelectValue placeholder='Status' />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value='all'>All</SelectItem>
-              <SelectItem value='allow'>Allow</SelectItem>
-              <SelectItem value='deny'>Denied</SelectItem>
-              <SelectItem value='exception'>Exception</SelectItem>
-              <SelectItem value='unreachable'>Unreachable</SelectItem>
-              <SelectItem value='unknown'>Unknown</SelectItem>
-            </SelectContent>
-          </Select>
-          <div className='flex items-center gap-2'>
-            <Input
-              type='time'
-              name='timePickerStart'
-              step='1'
-              className='w-fit appearance-none [&::-webkit-calendar-picker-indicator]:hidden [&::-webkit-calendar-picker-indicator]:appearance-none'
-            />
-            -
-            <Input
-              type='time'
-              name='timePickerEnd'
-              step='1'
-              className='w-fit appearance-none [&::-webkit-calendar-picker-indicator]:hidden [&::-webkit-calendar-picker-indicator]:appearance-none'
-            />
-          </div>
-          <Button variant='outline' type='submit'>
-            Apply filter
-          </Button>
-        </form>
-      )}
-    </div>
+function getCredentials(): Credentials | null {
+  const cred = getLocalStorage<Credentials>('credentials');
+  const oneTimeCred = getLocalStorage<Credentials>(
+    'one-time-credentials',
   );
-}
-
-interface Filters {
-  start?: string;
-  end?: string;
-  status?: string;
-}
-
-function checkStatus(status: string, log: TransactionInfo) {
-  switch (status) {
-    case 'all':
-      return true;
-    case 'allow':
-      return (
-        log.decision.verdict.includes('ALLOWED') &&
-        log.timing.checkpoints['client-out'] !== null
-      );
-    case 'deny':
-      return log.decision.verdict.includes('REJECTED');
-    case 'unreachable':
-      return log.timing.checkpoints['client-out'] === null;
-    case 'unknown':
-      return true;
-    case 'exception': {
-      let exception = false;
-      for (const { matches } of log.policyMatches) {
-        if (matches.includes('exception')) exception = true;
-      }
-      return exception;
-    }
+  if (cred) {
+    return cred;
+  } else if (oneTimeCred) {
+    return oneTimeCred;
+  } else {
+    return null;
   }
 }
 
@@ -244,10 +63,6 @@ function PageBase() {
   const [filteredLogs, setFilteredLogs] = useState<TransactionInfo[]>(
     [],
   );
-  const [credentials, setCredentials] = useState<Credentials | null>(
-    null,
-  );
-  const [ip, setIP] = useState('');
   const searchParams = useSearchParams();
   const [parent] = useAutoAnimate({
     duration: 600,
@@ -255,29 +70,35 @@ function PageBase() {
   const [rawLogs, setRawLogs] = useState<string[]>([]);
   const [filter, setFilter] = useState<null | Filters>(null);
   const [searchFilter, setSearchFilter] = useState('');
+  const [searchFilterValue] = useDebouncedValue(searchFilter, 500);
+  const [searchBy, setSearchBy] = useState<
+    'url' | 'transaction' | 'user' | 'ip'
+  >('url');
 
+  //logs collector
   useEffect(() => {
-    const cred = getLocalStorage<Credentials>('credentials');
-    const oneTimeCred = getLocalStorage<Credentials>(
-      'one-time-credentials',
-    );
-    if (cred) {
-      setCredentials(cred);
-    } else if (oneTimeCred) {
-      setCredentials(oneTimeCred);
-    }
-
-    if (searchParams.get('proxy'))
-      setIP(searchParams.get('proxy') || '');
-  }, [searchParams]);
-
-  useDidUpdate(() => {
     let unlisten: UnlistenFn | null = null;
-
+    const credentials = getCredentials();
+    const ipProxy = searchParams.get('proxy') || null;
+    if (!ipProxy) {
+      toast.error('Proxy not found.');
+      return;
+    }
+    if (!credentials) {
+      toast.error('Credentials not found.');
+      return;
+    }
     (async () => {
       unlisten = await listen<Logs>('logs:update', (e) => {
         const json = e.payload.json
-          .map<TransactionInfo>((j) => JSON.parse(j))
+          .map<TransactionInfo>((j) => {
+            const jso = JSON.parse(j) as TransactionInfo;
+            jso.decision.verdict = evaluatePolicyMatchesFn(
+              jso.policyMatches,
+              jso.timing.checkpoints,
+            );
+            return jso;
+          })
           .sort((a, b) => {
             const aNum = dayjs(b.connection.time).unix();
             const bNum = dayjs(a.connection.time).unix();
@@ -291,7 +112,7 @@ function PageBase() {
       });
 
       const start = invoke('start_logs', {
-        ippr: ip,
+        ippr: ipProxy,
         userpr: credentials?.username,
         passpr: credentials?.password,
       });
@@ -310,11 +131,13 @@ function PageBase() {
     })();
 
     return () => {
+      console.log('leaving trace page');
       unlisten?.();
       void invoke('stop_logs');
     };
-  }, [ip]);
+  }, [searchParams]);
 
+  //open advance modal
   useDidUpdate(() => {
     if (selectedTransactionId) {
       setSelectedTransaction({
@@ -329,38 +152,72 @@ function PageBase() {
     }
   }, [selectedTransactionId]);
 
+  //filter logs
   useEffect(() => {
-    if (!filter) {
-      setFilteredLogs(jsonLogs);
+    if (filter || searchFilter) {
+      console.log(filter);
+      console.log(searchFilter);
+      console.log(jsonLogs[1]);
+
+      const filtered = jsonLogs.filter((log) => {
+        let timeGap = true;
+        let searchMatch = true;
+        let veredictMatch = true;
+
+        const time = dayjs(log.connection.time).set(
+          'date',
+          dayjs().date(),
+        );
+        if (filter?.start && filter?.end) {
+          const baseRangeStart = dayjs(filter.start);
+          const baseRangeEnd = dayjs(filter.end);
+          const start = time
+            .set('hour', baseRangeStart.hour())
+            .set('minute', baseRangeStart.minute())
+            .set('second', baseRangeStart.second());
+          const end = time
+            .set('hour', baseRangeEnd.hour())
+            .set('minute', baseRangeEnd.minute())
+            .set('second', baseRangeEnd.second());
+
+          console.log(time.isBetween(start, end, null, '[]'));
+          timeGap = time.isBetween(start, end, null, '[]');
+        }
+        if (filter?.status && filter?.status !== 'all') {
+          veredictMatch =
+            log.decision.verdict.toLowerCase() === filter.status;
+        }
+        if (searchFilterValue) {
+          if (searchBy === 'url')
+            searchMatch =
+              log.transaction.dest.includes(searchFilterValue);
+          else if (searchBy === 'transaction')
+            searchMatch =
+              log.transaction.id.includes(searchFilterValue);
+          else if (searchBy === 'user')
+            searchMatch =
+              log.user.relativeName.includes(searchFilterValue);
+          else if (searchBy === 'ip')
+            searchMatch =
+              log.connection.client.includes(searchFilterValue);
+        }
+
+        return timeGap && searchMatch && veredictMatch;
+      });
+      setFilteredLogs(filtered);
       return;
     }
 
-    const filtered = jsonLogs.filter((log) => {
-      const time = dayjs(log.connection.time).set(
-        'date',
-        dayjs().date(),
-      );
-      // const url = log.transaction.dest;
-      let timeGap = true;
-      if (filter.start) {
-        console.log('got something?', filter.start, filter.end);
-        timeGap = time.isBetween(
-          dayjs(filter.start),
-          dayjs(filter.end),
-          'hours',
-        );
-      }
-      const status = checkStatus(filter.status || '', log);
-      return timeGap && status;
-    });
-    setFilteredLogs(filtered);
-  }, [jsonLogs, searchFilter, filter]);
+    setFilteredLogs(jsonLogs);
+  }, [jsonLogs, searchFilterValue, filter, searchBy]);
 
   return (
     <main className='w-dvw min-h-dvh flex flex-col gap-3 px-3'>
       <FilterBar
         setFilter={setFilter}
         setSearchFilter={setSearchFilter}
+        setSearchBy={setSearchBy}
+        searchBy={searchBy}
         searchFilter={searchFilter}
       />
       <AdvanceTransactionView

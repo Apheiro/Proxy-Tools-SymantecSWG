@@ -3,18 +3,24 @@ import {
   type UseDisclosureHandlers,
   useDisclosure,
 } from '@mantine/hooks';
+import { cva } from 'class-variance-authority';
+import { find } from 'lodash-es';
 import {
   ChevronDown,
   Copy,
   HardDriveDownload,
   HardDriveUpload,
+  type LucideProps,
   User,
   Waypoints,
 } from 'lucide-react';
 import {
   type Dispatch,
+  type ForwardRefExoticComponent,
+  type RefAttributes,
   type SetStateAction,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from 'react';
@@ -41,78 +47,105 @@ import {
   TimelineTitle,
 } from './ui/timeline';
 
+const checkpointValues = {
+  'new-connection': {
+    icon: Waypoints,
+    name: 'Transaction Started',
+    description: (vi: string, _vo: string) =>
+      `Finished establishing client side TCP connection in ${vi}ms`,
+  },
+  'client-in': {
+    icon: User,
+    name: 'Client Connected',
+    description: (vi: string, vo: string) =>
+      `client started sending data ${vi}ms in, took ${vo}ms`,
+  },
+  'server-out': {
+    icon: HardDriveUpload,
+    name: 'Request Sent',
+    description: (vi: string, _vo: string) =>
+      `Server side connection started at ${vi}ms`,
+  },
+  'cache-hit': {
+    icon: HardDriveDownload,
+    name: 'Response from Cache',
+    description: (vi: string, vo: string) =>
+      `Response got from cache in ${vi}ms, took ${vo}ms`,
+  },
+  'server-in': {
+    icon: HardDriveDownload,
+    name: 'Server Response',
+    description: (vi: string, vo: string) =>
+      `Server started sending response at ${vi}ms and took ${vo}ms`,
+  },
+  'client-out': {
+    icon: User,
+    name: 'Client response',
+    description: (vi: string, vo: string) =>
+      `Proxy started sending data to client at ${vi}ms, took ${vo}ms`,
+  },
+};
+
+interface Point {
+  name: string;
+  id: number;
+  startMs: number;
+  nameId: string;
+  elapsedMs: number;
+  description: string;
+  icon: ForwardRefExoticComponent<
+    Omit<LucideProps, 'ref'> & RefAttributes<SVGSVGElement>
+  >;
+}
+
+function generatePoints(checkpoints?: Checkpoints) {
+  const points: Point[] = [];
+  let idx = 0;
+  for (const point of Object.keys(checkpointValues)) {
+    const v = checkpoints[point];
+    if (!v) continue;
+    const c = checkpointValues[point];
+    points.push({
+      name: c.name,
+      nameId: point,
+      id: idx++,
+      startMs: v?.startMs,
+      elapsedMs: v?.elapsedMs,
+      description: c.description(v?.startMs, v?.elapsedMs),
+      icon: c.icon,
+    });
+  }
+  if (!find(points, { nameId: 'client-out' }))
+    points.push({
+      name: 'client-out',
+      nameId: 'client-out',
+      id: points.length,
+      startMs: 0,
+      elapsedMs: 0,
+      description: '',
+      icon: User,
+    });
+  return points;
+}
+
 function Connection({
   checkpoints,
 }: {
   checkpoints?: Checkpoints;
   trs?: string;
 }) {
-  const positionVal = useRef(0);
-  const [position, setPosition] = useState(0);
+  const position = useRef(0);
+  const connectionLine = useMemo(
+    () => generatePoints(checkpoints),
+    [checkpoints],
+  );
 
   useEffect(() => {
     for (const point of connectionLine) {
-      if (
-        checkpoints[point.checkpointId] === null ||
-        point.id === 5
-      ) {
-        checkpoints[point.checkpointId] === null
-          ? setPosition(positionVal.current)
-          : setPosition(point.id);
-        break;
-      }
-      positionVal.current = point.id;
+      if (checkpoints[point.nameId] === null) continue;
+      position.current = point.id;
     }
   }, [checkpoints]);
-
-  if (!checkpoints) return null;
-  const connectionLine = [
-    {
-      name: 'Transaction start',
-      id: 1,
-      startMs: checkpoints['new-connection']?.startMs,
-      elapsedMs: checkpoints['new-connection']?.elapsedMs,
-      description: `Finished establishing client side TCP connection in ${checkpoints['new-connection']?.elapsedMs}ms`,
-      checkpointId: 'new-connection',
-      icon: Waypoints,
-    },
-    {
-      name: 'Client connection',
-      id: 2,
-      startMs: checkpoints['new-connection']?.startMs,
-      elapsedMs: checkpoints['client-in']?.elapsedMs,
-      description: `client started sending data ${checkpoints['client-in']?.startMs}ms in, finished in ${checkpoints['client-out']?.elapsedMs}ms`,
-      checkpointId: 'client-in',
-      icon: User,
-    },
-    {
-      name: 'Server connection',
-      id: 3,
-      startMs: checkpoints['new-connection']?.startMs,
-      elapsedMs: checkpoints['server-out']?.elapsedMs,
-      description: `Server side connection started at ${checkpoints['server-out']?.startMs}ms`,
-      checkpointId: 'server-out',
-      icon: HardDriveUpload,
-    },
-    {
-      name: 'Server response',
-      id: 4,
-      startMs: checkpoints['new-connection']?.startMs,
-      elapsedMs: checkpoints['server-in']?.elapsedMs,
-      description: `Server started sending response at ${checkpoints['server-in']?.startMs}ms and finished in ${checkpoints['server-in']?.elapsedMs}ms`,
-      checkpointId: 'server-in',
-      icon: HardDriveDownload,
-    },
-    {
-      name: 'Client response',
-      id: 5,
-      startMs: checkpoints['new-connection']?.startMs,
-      elapsedMs: checkpoints['client-out']?.elapsedMs,
-      description: `Proxy started sending data to client at ${checkpoints['client-out']?.startMs}ms, took ${checkpoints['client-out']?.elapsedMs}ms `,
-      checkpointId: 'client-out',
-      icon: User,
-    },
-  ];
 
   return (
     <div className='max-w-250 p-6 flex flex-col gap-5 items-center'>
@@ -120,13 +153,13 @@ function Connection({
         Total transaction time:{' '}
         {checkpoints['stop-transaction']?.startMs} ms
       </p>
-      <Timeline value={position} orientation='horizontal'>
-        {connectionLine.map((point) => (
+      <Timeline value={position.current} orientation='horizontal'>
+        {connectionLine?.map((point) => (
           <TimelineItem key={point.id} step={point.id}>
             <TimelineHeader className='w-fit'>
               <TimelineSeparator />
 
-              {position >= point.id && (
+              {position.current >= point.id && (
                 <TimelineDate className='w-fit'>
                   {point.startMs} ms
                 </TimelineDate>
@@ -139,12 +172,104 @@ function Connection({
                 <point.icon size={14} />
               </TimelineIndicator>
             </TimelineHeader>
-            {position >= point.id && (
+            {position.current >= point.id && (
               <TimelineContent>{point.description}</TimelineContent>
             )}
           </TimelineItem>
         ))}
       </Timeline>
+    </div>
+  );
+}
+
+const MatchStyle = cva(['rounded-sm', ' p-2', 'relative'], {
+  variants: {
+    type: {
+      allowed: 'bg-green-300/10',
+      rejected: 'bg-red-400/10',
+      exception: 'bg-red-400/10',
+      base: 'bg-transparent',
+    },
+  },
+});
+
+const DotStyle = cva(
+  [
+    'before:content-[""]',
+    'before:animate-ping',
+    'before:left-0',
+    'before:top-0',
+    'before:absolute',
+    'before:w-2',
+    'before:h-2',
+    'before:rounded-full',
+    'before:mr-1',
+    'rounded-full',
+    'left-0',
+    'p-1',
+    'absolute',
+    'top-[calc(50%-3px)]',
+    'left-[-20px]',
+  ],
+  {
+    variants: {
+      type: {
+        allowed: 'bg-green-300 before:bg-green-300',
+        rejected: 'bg-red-400 before:bg-red-400',
+        exception: 'bg-red-400 before:bg-red-400',
+        base: 'bg-gray-300/50',
+      },
+    },
+  },
+);
+
+function PolicyMatch({ match }: { match: string }) {
+  const [veredict, setVerdict] = useState<
+    'allowed' | 'rejected' | 'exception' | 'base'
+  >('base');
+
+  useEffect(() => {
+    if (match.includes('ALLOW') || match.includes('ALLOWED'))
+      setVerdict('allowed');
+    if (
+      match.includes('DENY') ||
+      match.includes('DENIED') ||
+      match.includes('REJECTED')
+    )
+      setVerdict('rejected');
+    if (match.includes('exception')) setVerdict('exception');
+  }, []);
+
+  return (
+    <p className={MatchStyle({ type: veredict })}>
+      <span className={DotStyle({ type: veredict })} />
+      {match}
+    </p>
+  );
+}
+
+function EvaluationMatchesPolicy({ log }: { log: TransactionInfo }) {
+  return (
+    <div className='flex flex-col gap-3'>
+      <p className='font-bold'>Matches</p>
+      <Card className='relative w-full h-100'>
+        <div className='absolute left-3 right-1  bottom-3 top-3'>
+          <ScrollArea className='h-full w-full pr-3 absolute'>
+            {log?.policyMatches.map((m, i) => (
+              <div key={`${m.header}-${i}`}>
+                <div className='bg-secondary border-accent rounded-sm p-2'>
+                  <p>{m.header}</p>
+                </div>
+                <div className='rounded-sm py-2 pl-8'>
+                  {m.matches.map((match) => (
+                    <PolicyMatch match={match} key={match} />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </ScrollArea>
+        </div>
+      </Card>
     </div>
   );
 }
@@ -174,7 +299,7 @@ export default function AdvanceTransactionView({
         }
       }}
     >
-      <DialogContent className='max-w-[1000px]! position-relative px-1'>
+      <DialogContent className='max-w-[1000px]! max-h-[800px] h-full position-relative px-1'>
         <DialogHeader className='px-4'>
           <DialogTitle>Transaction advance details</DialogTitle>
         </DialogHeader>
@@ -184,9 +309,21 @@ export default function AdvanceTransactionView({
               trs={log?.transaction.id}
               checkpoints={log?.timing.checkpoints}
             />
-
             <Separator />
-
+            <div className='flex flex-col gap-3'>
+              <p>Assigned variables</p>
+              <div className='flex flex-wrap flex-row gap-2'>
+                {Object.entries(log?.assignedVariables || {}).map(
+                  ([key, value]) => (
+                    <Badge key={key} className='w-fit'>
+                      {key}:{' '}
+                      <span className='font-bold'>{value}</span>
+                    </Badge>
+                  ),
+                )}
+              </div>
+            </div>
+            <Separator />
             <div className='flex justify-between'>
               <Button
                 variant='outline'
@@ -200,7 +337,6 @@ export default function AdvanceTransactionView({
                 className='w-fit'
                 onClick={() => {
                   toast.success('Copied to clipboard');
-                  // navigator.clipboard.writeText(JSON.stringify(log));
                   navigator.clipboard.writeText(raw);
                 }}
               >
@@ -217,67 +353,38 @@ export default function AdvanceTransactionView({
                 </div>
               </Card>
             )}
-
-            <div className='flex flex-col gap-3'>
-              <p className='font-bold'>Matches</p>
-              <Card className='relative w-full h-100'>
-                <div className='absolute left-3 right-1  bottom-3 top-3'>
-                  <ScrollArea className='h-full w-full pr-3 absolute'>
-                    {log?.policyMatches.map((m, i) => (
-                      <div key={`${m.header}-${i}`}>
-                        <div className='bg-secondary border-accent rounded-sm p-2'>
-                          <p>{m.header}</p>
-                        </div>
-                        <div className=' rounded-sm p-2 pl-8'>
-                          {m.matches.map((match) => (
-                            <p key={match}>{match}</p>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </ScrollArea>
-                </div>
-              </Card>
-            </div>
-
-            <div className='flex flex-col gap-3'>
-              <p>Conditions matched</p>
-              <Card className='relative w-full h-100'>
-                <div className='absolute left-3 right-1  bottom-3 top-3'>
-                  <ScrollArea className='h-full w-full pr-3 absolute'>
-                    {log?.matchedConditions.map(
-                      ({ condition, matches }, i) => (
-                        // biome-ignore lint/suspicious/noArrayIndexKey: <>
-                        <div key={`${condition}-${i}`}>
-                          <div className='bg-secondary border-accent rounded-sm p-2'>
-                            <p>{condition}</p>
+            {log?.policyMatches.length > 0 && (
+              <>
+                <Separator />
+                <EvaluationMatchesPolicy log={log} />
+              </>
+            )}
+            {log?.matchedConditions.length > 0 && (
+              <div className='flex flex-col gap-3'>
+                <p>Conditions matched</p>
+                <Card className='relative w-full h-100'>
+                  <div className='absolute left-3 right-1  bottom-3 top-3'>
+                    <ScrollArea className='h-full w-full pr-3 absolute'>
+                      {log?.matchedConditions.map(
+                        ({ condition, matches }, i) => (
+                          // biome-ignore lint/suspicious/noArrayIndexKey: <>
+                          <div key={`${condition}-${i}`}>
+                            <div className='bg-secondary border-accent rounded-sm p-2'>
+                              <p>{condition}</p>
+                            </div>
+                            <div className=' rounded-sm p-2 pl-8'>
+                              {matches.map((match) => (
+                                <p key={match}>{match}</p>
+                              ))}
+                            </div>
                           </div>
-                          <div className=' rounded-sm p-2 pl-8'>
-                            {matches.map((match) => (
-                              <p key={match}>{match}</p>
-                            ))}
-                          </div>
-                        </div>
-                      ),
-                    )}
-                  </ScrollArea>
-                </div>
-              </Card>
-            </div>
-
-            <div className='flex flex-col gap-3'>
-              <p>Assigned variables</p>
-              <div className='flex flex-wrap flex-row gap-2'>
-                {Object.entries(log?.assignedVariables || {}).map(
-                  ([key, value]) => (
-                    <Badge key={key} className='w-fit'>
-                      {key}:{' '}
-                      <span className='font-bold'>{value}</span>
-                    </Badge>
-                  ),
-                )}
+                        ),
+                      )}
+                    </ScrollArea>
+                  </div>
+                </Card>
               </div>
-            </div>
+            )}
           </section>
         </ScrollArea>
       </DialogContent>
