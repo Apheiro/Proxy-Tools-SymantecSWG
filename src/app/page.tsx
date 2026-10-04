@@ -6,6 +6,8 @@ import { invoke } from '@tauri-apps/api/core';
 import { some } from 'lodash-es';
 import {
   Activity,
+  FileCode2,
+  Network,
   Plus,
   RefreshCcw,
   Server,
@@ -16,6 +18,7 @@ import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import * as v from 'valibot';
 import DotField from '@/components/dots';
+import PacFileManagerWorkspace from '@/components/pacFileManagerWorkspace';
 import ProxyCard from '@/components/proxyCard';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -51,7 +54,8 @@ function knownProxyValue(value?: string) {
 }
 
 function isIpAddress(value?: string) {
-  if (!value || value.trim() !== value || /\s/.test(value)) return false;
+  if (!value || value.trim() !== value || /\s/.test(value))
+    return false;
   if (value.includes(':')) {
     try {
       return new URL(`http://[${value}]/`).hostname.length > 0;
@@ -62,8 +66,11 @@ function isIpAddress(value?: string) {
   const octets = value.split('.');
   return (
     octets.length === 4 &&
-    octets.every((octet) =>
-      /^\d{1,3}$/.test(octet) && Number(octet) >= 0 && Number(octet) <= 255,
+    octets.every(
+      (octet) =>
+        /^\d{1,3}$/.test(octet) &&
+        Number(octet) >= 0 &&
+        Number(octet) <= 255,
     )
   );
 }
@@ -76,7 +83,9 @@ function getLoggedHostname(proxy: Proxy) {
     return pingTarget;
   }
 
-  const dnsQuery = proxy.nslookup?.match(/can't find\s+([^\s:]+)/i)?.[1];
+  const dnsQuery = proxy.nslookup?.match(
+    /can't find\s+([^\s:]+)/i,
+  )?.[1];
   return knownProxyValue(dnsQuery) && !isIpAddress(dnsQuery)
     ? dnsQuery
     : undefined;
@@ -101,7 +110,9 @@ function getProxyPrimaryAddress(proxy: Proxy) {
   if (isIpAddress(pingTarget?.[2])) return pingTarget?.[2];
   if (knownProxyValue(pingTarget?.[1])) return pingTarget?.[1];
 
-  const dnsQuery = proxy.nslookup?.match(/can't find\s+([^\s:]+)/i)?.[1];
+  const dnsQuery = proxy.nslookup?.match(
+    /can't find\s+([^\s:]+)/i,
+  )?.[1];
   return knownProxyValue(dnsQuery) ?? null;
 }
 
@@ -122,20 +133,35 @@ function mergeProxyCheck(previous: Proxy, check: Proxy): Proxy {
     primary_address:
       checkedPrimary ?? getProxyPrimaryAddress(previous) ?? undefined,
     hostinfo: {
-      hostname: keepKnown(check.hostinfo?.hostname, previous.hostinfo?.hostname),
+      hostname: keepKnown(
+        check.hostinfo?.hostname,
+        previous.hostinfo?.hostname,
+      ),
       ip: keepKnown(check.hostinfo?.ip, previous.hostinfo?.ip),
-      dnsname: keepKnown(check.hostinfo?.dnsname, previous.hostinfo?.dnsname),
-      dnsip: keepKnown(check.hostinfo?.dnsip, previous.hostinfo?.dnsip),
+      dnsname: keepKnown(
+        check.hostinfo?.dnsname,
+        previous.hostinfo?.dnsname,
+      ),
+      dnsip: keepKnown(
+        check.hostinfo?.dnsip,
+        previous.hostinfo?.dnsip,
+      ),
     },
   };
 }
 
 export default function Page() {
+  const [workspace, setWorkspace] = useState<'proxy' | 'pac'>(
+    'proxy',
+  );
   const [proxies, setProxies] = useState<Proxy[]>([]);
   const [disable, setDisable] = useState(false);
   const [disableReCheck, setDisableReCheck] = useState(false);
 
   useEffect(() => {
+    const savedWorkspace = localStorage.getItem('home-workspace');
+    if (savedWorkspace === 'pac' || savedWorkspace === 'proxy')
+      setWorkspace(savedWorkspace);
     const storedProxies: Proxy[] = getLocalStorage('proxies') || [];
     const normalizedProxies = storedProxies.map((proxy) => {
       const recoveredHostname =
@@ -161,7 +187,9 @@ export default function Page() {
             'unknown',
           ip:
             knownProxyValue(proxy.hostinfo?.ip) ??
-            (isIpAddress(primaryAddress) ? primaryAddress : 'unknown'),
+            (isIpAddress(primaryAddress)
+              ? primaryAddress
+              : 'unknown'),
         },
       };
     });
@@ -169,7 +197,8 @@ export default function Page() {
     if (
       normalizedProxies.some(
         (proxy, index) =>
-          proxy.primary_address !== storedProxies[index]?.primary_address ||
+          proxy.primary_address !==
+            storedProxies[index]?.primary_address ||
           proxy.registered_address !==
             storedProxies[index]?.registered_address ||
           proxy.hostname !== storedProxies[index]?.hostname ||
@@ -190,7 +219,9 @@ export default function Page() {
     const updatePromise = Promise.all(
       proxies.map(async (proxy) => {
         // Preserve the existing behavior of not rechecking ambiguous multi-IP hosts.
-        if (proxy.hostinfo.ip.split(/\s+/).filter(Boolean).length > 1) {
+        if (
+          proxy.hostinfo.ip.split(/\s+/).filter(Boolean).length > 1
+        ) {
           return proxy;
         }
         const address = getProxyPrimaryAddress(proxy);
@@ -217,7 +248,9 @@ export default function Page() {
   };
 
   const deleteProxy = (proxyToDelete: Proxy) => {
-    const updatedProxies = proxies.filter((proxy) => proxy !== proxyToDelete);
+    const updatedProxies = proxies.filter(
+      (proxy) => proxy !== proxyToDelete,
+    );
     postLocalStorage('proxies', updatedProxies);
     setProxies(updatedProxies);
   };
@@ -264,8 +297,65 @@ export default function Page() {
   const activeCount = proxies.filter((proxy) => proxy.active).length;
   const inactiveCount = proxies.length - activeCount;
 
+  const workspaceToggle = (
+    <div
+      className='flex w-fit items-center gap-1 rounded-xl border bg-muted/50 p-1'
+      role='group'
+      aria-label='Seleccionar workspace'
+    >
+      <Button
+        type='button'
+        size='sm'
+        variant={workspace === 'proxy' ? 'default' : 'ghost'}
+        onClick={() => {
+          setWorkspace('proxy');
+          localStorage.setItem('home-workspace', 'proxy');
+        }}
+      >
+        <Network className='size-4' />
+        Proxy Workspace
+      </Button>
+      <Button
+        type='button'
+        size='sm'
+        variant={workspace === 'pac' ? 'default' : 'ghost'}
+        onClick={() => {
+          setWorkspace('pac');
+          localStorage.setItem('home-workspace', 'pac');
+        }}
+      >
+        <FileCode2 className='size-4' />
+        PAC File Manager
+      </Button>
+    </div>
+  );
+
+  if (workspace === 'pac') {
+    return (
+      <main className='mx-auto flex min-h-dvh w-full max-w-7xl flex-col gap-6 px-4 py-6 md:px-6'>
+        {workspaceToggle}
+        <header className='flex flex-col gap-2 border-b pb-5'>
+          <div className='flex items-center gap-2 text-sm text-muted-foreground'>
+            <FileCode2 className='size-4' />
+            Workspace de archivos PAC/WPAD
+          </div>
+          <h1 className='text-2xl font-bold tracking-tight md:text-3xl'>
+            PAC File Manager Workspace
+          </h1>
+          <p className='max-w-2xl text-sm text-muted-foreground'>
+            Cargá fuentes WPAD/PAC, revisá sus reglas en orden y
+            prepará una versión exportable. Los destinos de proxy usan
+            el inventario ya registrado.
+          </p>
+        </header>
+        <PacFileManagerWorkspace proxies={proxies} />
+      </main>
+    );
+  }
+
   return (
     <main className='mx-auto flex min-h-dvh w-full max-w-7xl flex-col gap-8 px-4 py-6 md:px-6'>
+      {workspaceToggle}
       <header className='flex flex-col gap-5 border-b pb-6 md:flex-row md:items-end md:justify-between'>
         <div className='flex flex-col gap-2'>
           <div className='flex items-center gap-2 text-sm text-muted-foreground'>
@@ -276,13 +366,16 @@ export default function Page() {
             Proxy workspace
           </h1>
           <p className='max-w-xl text-sm text-muted-foreground'>
-            Add a proxy, check its reachability, and open its diagnostic tools.
+            Add a proxy, check its reachability, and open its
+            diagnostic tools.
           </p>
         </div>
 
         <div className='grid grid-cols-2 gap-2 sm:min-w-64'>
           <div className='rounded-lg border bg-card px-4 py-3'>
-            <p className='text-xs text-muted-foreground'>Configured</p>
+            <p className='text-xs text-muted-foreground'>
+              Configured
+            </p>
             <p className='mt-1 flex items-center gap-2 text-xl font-semibold'>
               <Server className='size-4 text-muted-foreground' />
               {proxies.length}
@@ -322,7 +415,8 @@ export default function Page() {
                   Add a proxy
                 </h2>
                 <p className='max-w-lg text-sm text-muted-foreground'>
-                  Enter a hostname or IP address to check whether it is reachable from this device.
+                  Enter a hostname or IP address to check whether it
+                  is reachable from this device.
                 </p>
               </div>
             </div>
@@ -334,7 +428,9 @@ export default function Page() {
               className='flex w-full flex-col gap-2 sm:flex-row md:max-w-lg'
             >
               <FormItem className='min-w-0 flex-1'>
-                <FormLabel htmlFor='proxy-hostname'>Hostname or IP</FormLabel>
+                <FormLabel htmlFor='proxy-hostname'>
+                  Hostname or IP
+                </FormLabel>
                 <Input
                   id='proxy-hostname'
                   {...form.getInputProps('hostname')}
@@ -357,17 +453,24 @@ export default function Page() {
         </Card>
       </section>
 
-      <section className='flex flex-col gap-4' aria-labelledby='inventory-title'>
+      <section
+        className='flex flex-col gap-4'
+        aria-labelledby='inventory-title'
+      >
         <div className='flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between'>
           <div>
             <div className='flex items-center gap-2'>
-              <h2 id='inventory-title' className='text-xl font-semibold'>
+              <h2
+                id='inventory-title'
+                className='text-xl font-semibold'
+              >
                 Configured proxies
               </h2>
               <Badge variant='secondary'>{proxies.length}</Badge>
             </div>
             <p className='mt-1 text-sm text-muted-foreground'>
-              Current reachability and diagnostic access for saved proxies.
+              Current reachability and diagnostic access for saved
+              proxies.
             </p>
           </div>
           <Button
@@ -376,7 +479,9 @@ export default function Page() {
             disabled={disableReCheck}
             className='w-fit'
           >
-            <RefreshCcw className={disableReCheck ? 'animate-spin' : ''} />
+            <RefreshCcw
+              className={disableReCheck ? 'animate-spin' : ''}
+            />
             Re-check proxies
           </Button>
         </div>
@@ -402,15 +507,17 @@ export default function Page() {
             </span>
             <h3 className='mt-2 font-medium'>No proxies added yet</h3>
             <p className='max-w-sm text-sm text-muted-foreground'>
-              Add a hostname or IP above. Reachability results and saved proxies will appear here.
+              Add a hostname or IP above. Reachability results and
+              saved proxies will appear here.
             </p>
           </div>
         )}
 
         {proxies.length > 0 && (
           <p className='text-xs text-muted-foreground'>
-            {inactiveCount} {inactiveCount === 1 ? 'proxy is' : 'proxies are'}
-            {' '}currently marked unreachable.
+            {inactiveCount}{' '}
+            {inactiveCount === 1 ? 'proxy is' : 'proxies are'}{' '}
+            currently marked unreachable.
           </p>
         )}
       </section>

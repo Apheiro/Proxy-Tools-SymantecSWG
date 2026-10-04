@@ -95,6 +95,54 @@ use tokio_util::sync::CancellationToken;
 
 use tauri::{ WebviewUrl, WebviewWindowBuilder,Manager, AppHandle, Emitter,  State};
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PacSourceResponse {
+    requested_url: String,
+    final_url: String,
+    status: u16,
+    etag: Option<String>,
+    last_modified: Option<String>,
+    content: String,
+}
+
+#[tauri::command]
+async fn fetch_pac_source(url: String) -> Result<PacSourceResponse, String> {
+    let parsed = reqwest::Url::parse(&url).map_err(|error| format!("URL PAC inválida: {error}"))?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none()
+        || !parsed.username().is_empty() || parsed.password().is_some()
+    {
+        return Err("La fuente debe ser una URL HTTP(S) válida, sin credenciales embebidas.".into());
+    }
+    const MAX_PAC_BYTES: usize = 512 * 1024;
+    let client = reqwest::Client::builder()
+        .user_agent("SymantecProxyApp PAC manager")
+        .danger_accept_invalid_certs(true)
+        .build()
+        .map_err(|error| format!("No se pudo preparar la conexión a la fuente PAC: {error}"))?;
+    let mut response = client.get(parsed.clone()).send().await
+        .map_err(|error| format!("No se pudo descargar la fuente PAC: {error}"))?;
+    let status = response.status();
+    let final_url = response.url().to_string();
+    let etag = response.headers().get(reqwest::header::ETAG).and_then(|v| v.to_str().ok()).map(str::to_owned);
+    let last_modified = response.headers().get(reqwest::header::LAST_MODIFIED).and_then(|v| v.to_str().ok()).map(str::to_owned);
+    if !status.is_success() {
+        return Err(format!("La fuente PAC respondió HTTP {}.", status.as_u16()));
+    }
+    if response.content_length().is_some_and(|size| size > MAX_PAC_BYTES as u64) {
+        return Err("La fuente PAC supera el límite de 512 KiB.".into());
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|error| format!("No se pudo leer la fuente PAC: {error}"))? {
+        if bytes.len() + chunk.len() > MAX_PAC_BYTES {
+            return Err("La fuente PAC supera el límite de 512 KiB.".into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    let content = String::from_utf8(bytes).map_err(|_| "La fuente PAC no contiene texto UTF-8 válido.".to_string())?;
+    Ok(PacSourceResponse { requested_url: parsed.to_string(), final_url, status: status.as_u16(), etag, last_modified, content })
+}
+
 #[tauri::command]
 async fn open_proxy(
   app: tauri::AppHandle,
@@ -332,6 +380,27 @@ fn check_cache_dir(app: &AppHandle) -> std::io::Result<PathBuf> {
     // Asegura que exista la carpeta
     fs::create_dir_all(&path)?;
     Ok(path)
+}
+
+#[tauri::command]
+fn get_app_cache_paths(app: AppHandle) -> Result<AppCachePaths, String> {
+    let directory = app.path()
+        .app_cache_dir()
+        .map_err(|error| format!("Could not resolve the application cache directory: {error}"))
+        ?;
+    Ok(AppCachePaths {
+        raw_log: directory.join("rawLogs.log").display().to_string(),
+        json_log: directory.join("logs.jsonl").display().to_string(),
+        directory: directory.display().to_string(),
+    })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AppCachePaths {
+    directory: String,
+    raw_log: String,
+    json_log: String,
 }
 
 #[derive(Serialize)]
@@ -664,9 +733,15 @@ async fn get_html_data(
         let file_url = if use_mock_data {
             let mock_base = reqwest::Url::parse("http://127.0.0.1:5500/")
                 .expect("static mock base URL is valid");
-            let file_url = mock_base
+            let mut file_url = mock_base
                 .join(href)
                 .map_err(|error| format!("Invalid mock policy link: {error}"))?;
+            // The local fixture exposes its current-policy page as Policy.html.
+            if file_url.path().trim_end_matches('/') == "/Policy/Current" {
+                file_url = mock_base
+                    .join("Policy.html")
+                    .expect("static mock policy URL is valid");
+            }
             if file_url.scheme() != mock_base.scheme()
                 || file_url.host_str() != mock_base.host_str()
                 || file_url.port() != mock_base.port()
@@ -767,7 +842,7 @@ pub fn run() {
     tauri::Builder::default()
     .manage(LogWorkerState::default())
     .plugin(tauri_plugin_opener::init())
-    .invoke_handler(tauri::generate_handler![getproxystatus, start_logs, stop_logs, open_proxy, get_html_data])
+    .invoke_handler(tauri::generate_handler![getproxystatus, start_logs, stop_logs, open_proxy, get_html_data, fetch_pac_source, get_app_cache_paths])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
 }
