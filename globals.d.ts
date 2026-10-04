@@ -105,7 +105,7 @@ declare interface Checkpoint {
 declare interface Filters {
   start?: string;
   end?: string;
-  status?: string;
+  status?: string[];
 }
 
 declare interface Transaction {

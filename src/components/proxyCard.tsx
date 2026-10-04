@@ -54,11 +54,13 @@ function LoginRequiredDialog({
   setOpen,
   redirection,
   proxyIp,
+  onCredentials,
 }: {
   open: boolean;
   setOpen: (open: boolean) => void;
   redirection: string;
   proxyIp: string;
+  onCredentials?: (credentials: Credentials) => void;
 }) {
   const router = useRouter();
   const url = useUrlResolver(redirection, {
@@ -78,7 +80,8 @@ function LoginRequiredDialog({
     postLocalStorage('one-time-credentials', cred);
     toast.success('Credentials validated successfully.');
     setOpen(false);
-    router.push(url);
+    if (onCredentials) onCredentials(cred);
+    else router.push(url);
   };
 
   return (
@@ -222,6 +225,28 @@ export default function ProxyCard({
   const [openLog, setOpenLog] = useState(false);
   const [delAlert, setOpenAlert] = useState(false);
   const [openLogin, setOpenLogin] = useState(false);
+  const [pendingProxyUrl, setPendingProxyUrl] = useState<
+    string | null
+  >(null);
+
+  const openProxy = (url: string, credentials?: Credentials) => {
+    const auth =
+      credentials ||
+      getLocalStorage<Credentials>('credentials') ||
+      getLocalStorage<Credentials>('one-time-credentials');
+    if (!auth) {
+      setPendingProxyUrl(url);
+      setOpenLogin(true);
+      return;
+    }
+
+    invoke('open_proxy', {
+      url,
+      username: auth.username,
+      password: auth.password,
+    });
+    setPendingProxyUrl(null);
+  };
 
   return (
     <Card className='w-full h-fit'>
@@ -241,6 +266,10 @@ export default function ProxyCard({
         setOpen={setOpenLogin}
         proxyIp={proxy.hostinfo.ip}
         redirection={'/Diagnostics'}
+        onCredentials={(credentials) => {
+          if (pendingProxyUrl)
+            openProxy(pendingProxyUrl, credentials);
+        }}
       />
       <CardHeader className='flex flex-col'>
         {proxy.hostinfo.ip.split(' ').length > 1 && (
@@ -308,18 +337,16 @@ export default function ProxyCard({
               </DropdownMenuItem>
               <DropdownMenuItem
                 onClick={() => {
-                  invoke('open_proxy', {
-                    url: `https://${proxy.hostinfo.ip}:8082/Secure/Local/console/mc_vpm.html`,
-                  });
+                  openProxy(
+                    `https://${proxy.hostinfo.ip}:8082/Secure/Local/console/mc_vpm.html`,
+                  );
                 }}
               >
                 Open vpm (Early)
               </DropdownMenuItem>
               <DropdownMenuItem
                 onClick={() => {
-                  invoke('open_proxy', {
-                    url: `https://${proxy.hostinfo.ip}:8082/`,
-                  });
+                  openProxy(`https://${proxy.hostinfo.ip}:8082/`);
                 }}
               >
                 Open admin console (Early)

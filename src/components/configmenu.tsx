@@ -2,7 +2,15 @@
 'use client';
 import { useForm } from '@mantine/form';
 import { cva } from 'class-variance-authority';
-import { Settings } from 'lucide-react';
+import {
+  Check,
+  Database,
+  KeyRound,
+  Moon,
+  Settings,
+  ShieldCheck,
+  Wifi,
+} from 'lucide-react';
 import { valibotResolver } from 'mantine-form-valibot-resolver';
 import { useEffect, useId, useState } from 'react';
 import { toast } from 'sonner';
@@ -22,6 +30,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import useTheme from '@/hook/useTheme';
+import useDataSourceMode from '@/lib/useDataSourceMode';
 import {
   deleteLocalStorage,
   getLocalStorage,
@@ -53,6 +62,7 @@ function CredentialsDialog({
   deleteCredentials: () => void;
 }) {
   const { setTheme, theme } = useTheme();
+  const { mode, setMode } = useDataSourceMode();
   const [deleteCredOnClose, setDeleteCredOnClose] = useState(false);
   const form = useForm({
     validate: valibotResolver(credentialSchema),
@@ -66,98 +76,195 @@ function CredentialsDialog({
   const pswId = useId();
 
   useEffect(() => {
+    form.setValues({
+      username: credentials?.username ?? '',
+      password: credentials?.password ?? '',
+    });
     setTheme(getLocalStorage('dark_mode') ? 'dark' : 'light');
     setDeleteCredOnClose(getLocalStorage('delete_on_close'));
-  }, []);
+  }, [credentials]);
 
   return (
     <Drawer direction='right' open={open} onOpenChange={setOpen}>
-      <DrawerContent className='bg-transparent border-none p-3'>
-        <div className='flex flex-col gap-4 h-full bg-[var(--background)] p-5 rounded-2xl'>
+      <DrawerContent className='border-none bg-transparent p-3'>
+        <div className='flex h-full flex-col gap-5 rounded-2xl bg-[var(--background)] p-5'>
           <DrawerHeader className='p-0'>
-            <DrawerTitle>Configuration</DrawerTitle>
+            <div className='mb-1 flex size-10 items-center justify-center rounded-xl bg-primary/10 text-primary'>
+              <Settings className='size-5' />
+            </div>
+            <DrawerTitle className='text-xl'>Settings</DrawerTitle>
             <DrawerDescription>
-              Global app configuration.
+              Manage your connection, credentials, and appearance.
             </DrawerDescription>
           </DrawerHeader>
-          <div className='flex flex-col p-2 gap-5'>
-            <form
-              className='flex flex-col gap-5'
-              onSubmit={form.onSubmit((data) => {
-                saveCredentials(data);
-              })}
-            >
-              <div>
-                <h2>User credentials</h2>
+          <div className='flex flex-col gap-4 overflow-y-auto'>
+            <section className='rounded-xl border bg-muted/20 p-4'>
+              <div className='mb-4 flex items-start gap-3'>
+                <span className='flex size-9 shrink-0 items-center justify-center rounded-lg bg-background text-muted-foreground'>
+                  {mode === 'mock' ? (
+                    <Database className='size-4' />
+                  ) : (
+                    <Wifi className='size-4' />
+                  )}
+                </span>
+                <div className='min-w-0 flex-1'>
+                  <div className='flex items-center justify-between gap-2'>
+                    <h2 className='text-sm font-semibold'>
+                      Data source
+                    </h2>
+                    <span className='rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground'>
+                      {mode === 'mock' ? 'Mock' : 'Live'}
+                    </span>
+                  </div>
+                  <p className='mt-1 text-xs leading-relaxed text-muted-foreground'>
+                    {mode === 'mock'
+                      ? 'Use the local sample server for offline development.'
+                      : 'Connect to the selected ProxySG over HTTPS.'}
+                  </p>
+                </div>
+              </div>
+              <div className='flex items-center justify-between gap-3 rounded-lg bg-background px-3 py-2.5'>
+                <div>
+                  <p className='text-sm font-medium'>
+                    Use live proxy data
+                  </p>
+                  <p className='text-xs text-muted-foreground'>
+                    {mode === 'live'
+                      ? 'HTTPS certificate checks are enabled.'
+                      : 'Switch on to contact the configured proxy.'}
+                  </p>
+                </div>
+                <Switch
+                  id='data-source-mode'
+                  checked={mode === 'live'}
+                  onCheckedChange={(checked) =>
+                    setMode(checked ? 'live' : 'mock')
+                  }
+                  aria-label='Use live proxy data'
+                />
+              </div>
+              <div className='mt-3 flex items-start gap-2 text-[11px] leading-relaxed text-muted-foreground'>
+                <ShieldCheck className='mt-0.5 size-3.5 shrink-0' />
+                Live requests use the selected proxy and saved
+                credentials. Private or self-signed certificates may
+                require CA support before connecting.
+              </div>
+            </section>
 
-                <p className='text-muted-foreground text-xs'>
-                  {credentials
-                    ? ' Your credentials are already saved. And will be used to get the trace data from the proxy, when you end your session we recommend you delete them.'
-                    : '  Enter your username and password and save it to use it later without having to type it again.'}
+            <section className='rounded-xl border p-4'>
+              <div className='mb-4 flex items-start gap-3'>
+                <span className='flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary'>
+                  <KeyRound className='size-4' />
+                </span>
+                <div>
+                  <h2 className='text-sm font-semibold'>
+                    Proxy credentials
+                  </h2>
+                  <p className='mt-1 text-xs leading-relaxed text-muted-foreground'>
+                    {credentials
+                      ? 'Saved credentials are used for proxy requests.'
+                      : 'Save credentials to authenticate with your proxy.'}
+                  </p>
+                </div>
+              </div>
+              <form
+                className='flex flex-col gap-4'
+                onSubmit={form.onSubmit((data) => {
+                  saveCredentials(data);
+                })}
+              >
+                <p className='text-xs text-muted-foreground'>
+                  Credentials are stored in this app and sent only
+                  with proxy requests.
                 </p>
-              </div>
 
-              <div className='flex flex-col gap-2'>
-                <FormLabel htmlFor={usrId}>Username</FormLabel>
-                <Input
-                  id={usrId}
-                  {...form.getInputProps('username')}
-                  placeholder='J.Doe'
-                />
-                <FormLabel htmlFor={pswId}>Password</FormLabel>
-                <Input
-                  id={pswId}
-                  {...form.getInputProps('password')}
-                  type='password'
-                  placeholder='Fd********'
-                />
-              </div>
-              <div className='flex self-end gap-2'>
-                {credentials && (
-                  <Button
-                    size='sm'
-                    variant='destructive'
-                    onClick={() => {
-                      deleteCredentials();
-                      form.reset();
-                    }}
-                    className='self-end bg-red-500/90 border-red-500/50 border-1'
-                  >
-                    Delete
+                <div className='flex flex-col gap-2'>
+                  <FormLabel htmlFor={usrId}>Username</FormLabel>
+                  <Input
+                    id={usrId}
+                    {...form.getInputProps('username')}
+                    placeholder='Username'
+                  />
+                  <FormLabel htmlFor={pswId}>Password</FormLabel>
+                  <Input
+                    id={pswId}
+                    {...form.getInputProps('password')}
+                    type='password'
+                    placeholder='Password'
+                  />
+                </div>
+                <div className='flex self-end gap-2'>
+                  {credentials && (
+                    <Button
+                      type='button'
+                      size='sm'
+                      variant='destructive'
+                      onClick={() => {
+                        deleteCredentials();
+                        form.reset();
+                      }}
+                      className='self-end bg-red-500/90 border-red-500/50 border-1'
+                    >
+                      Delete
+                    </Button>
+                  )}
+
+                  <Button type='submit' size='sm'>
+                    {credentials && <Check className='size-4' />}
+                    {credentials ? 'Update' : 'Save'}
                   </Button>
-                )}
+                </div>
+              </form>
+            </section>
 
-                <Button type='submit' size='sm'>
-                  {credentials ? 'Update' : 'Save'}
-                </Button>
+            <section className='rounded-xl border p-4'>
+              <div className='mb-3 flex items-center gap-3'>
+                <span className='flex size-9 items-center justify-center rounded-lg bg-muted text-muted-foreground'>
+                  <Moon className='size-4' />
+                </span>
+                <div>
+                  <h2 className='text-sm font-semibold'>
+                    Appearance & privacy
+                  </h2>
+                  <p className='text-xs text-muted-foreground'>
+                    Personalize this device.
+                  </p>
+                </div>
               </div>
-            </form>
-
-            <div className='flex items-center space-x-2'>
-              <Switch
-                id='d_mode'
-                defaultChecked={theme === 'dark'}
-                onCheckedChange={(checked) => {
-                  console.log(theme, getLocalStorage('dark_mode'));
-                  setTheme(checked ? 'dark' : 'light');
-                  postLocalStorage('dark_mode', checked);
-                }}
-              />
-              <Label htmlFor='d_mode'>Dark mode</Label>
-            </div>
-
-            <div className='flex items-center space-x-2'>
-              <Switch
-                id='delete_close'
-                defaultChecked={deleteCredOnClose}
-                onCheckedChange={(checked) => {
-                  postLocalStorage('delete_on_close', checked);
-                }}
-              />
-              <Label htmlFor='delete_close'>
-                Delete credential on close
-              </Label>
-            </div>
+              <div className='flex flex-col divide-y'>
+                <div className='flex items-center justify-between gap-3 py-3'>
+                  <Label htmlFor='d_mode' className='text-sm'>
+                    Dark mode
+                  </Label>
+                  <Switch
+                    id='d_mode'
+                    checked={theme === 'dark'}
+                    onCheckedChange={(checked) => {
+                      setTheme(checked ? 'dark' : 'light');
+                      postLocalStorage('dark_mode', checked);
+                    }}
+                  />
+                </div>
+                <div className='flex items-center justify-between gap-3 py-3'>
+                  <div>
+                    <Label htmlFor='delete_close' className='text-sm'>
+                      Clear temporary credentials on exit
+                    </Label>
+                    <p className='mt-1 text-xs text-muted-foreground'>
+                      Remove one-time credentials when the app closes.
+                    </p>
+                  </div>
+                  <Switch
+                    id='delete_close'
+                    checked={deleteCredOnClose}
+                    onCheckedChange={(checked) => {
+                      setDeleteCredOnClose(checked);
+                      postLocalStorage('delete_on_close', checked);
+                    }}
+                  />
+                </div>
+              </div>
+            </section>
           </div>
 
           <DrawerFooter>

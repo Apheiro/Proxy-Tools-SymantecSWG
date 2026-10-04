@@ -96,17 +96,93 @@ use tokio_util::sync::CancellationToken;
 use tauri::{ WebviewUrl, WebviewWindowBuilder,Manager, AppHandle, Emitter,  State};
 
 #[tauri::command]
-async fn open_proxy(app: tauri::AppHandle, url: String)  -> tauri::Result<()>{
-  WebviewWindowBuilder::new(
+async fn open_proxy(
+  app: tauri::AppHandle,
+  url: String,
+  username: String,
+  password: String,
+) -> tauri::Result<()> {
+  let url: tauri::Url = url.parse().map_err(tauri::Error::InvalidUrl)?;
+  let window = WebviewWindowBuilder::new(
       &app,
       "tab-viewer".to_string(),
-      WebviewUrl::External(url.parse().unwrap())
+      WebviewUrl::External("about:blank".parse().unwrap())
   )
   .title("Nueva pestaña")
   .inner_size(1200.0, 800.0)
   .resizable(true)
-  .build()
-  .unwrap();
+  .build()?;
+
+  #[cfg(not(target_os = "windows"))]
+  {
+    window.navigate(url)?;
+    return Ok(());
+  }
+
+  #[cfg(target_os = "windows")]
+  window.with_webview(move |webview| {
+    unsafe {
+      use webview2_com::{
+        BasicAuthenticationRequestedEventHandler,
+        Microsoft::Web::WebView2::Win32::ICoreWebView2_10,
+      };
+      use windows::core::{Interface, PCWSTR};
+
+      let controller = webview.controller();
+      let core_webview = match controller.CoreWebView2() {
+        Ok(core_webview) => core_webview,
+        Err(error) => {
+          eprintln!("Failed to get WebView2 instance: {error}");
+          return;
+        }
+      };
+      let webview_with_auth = match core_webview.cast::<ICoreWebView2_10>() {
+        Ok(webview) => webview,
+        Err(error) => {
+          eprintln!("WebView2 BasicAuthenticationRequested is unavailable: {error}");
+          return;
+        }
+      };
+
+      let auth_handler = BasicAuthenticationRequestedEventHandler::create(Box::new(
+        move |_sender, args| {
+          if let Some(args) = args {
+            let response = args.Response()?;
+            let username_wide: Vec<u16> = username
+              .encode_utf16()
+              .chain(std::iter::once(0))
+              .collect();
+            let password_wide: Vec<u16> = password
+              .encode_utf16()
+              .chain(std::iter::once(0))
+              .collect();
+            response.SetUserName(PCWSTR::from_raw(username_wide.as_ptr()))?;
+            response.SetPassword(PCWSTR::from_raw(password_wide.as_ptr()))?;
+          }
+          Ok(())
+        },
+      ));
+
+      let mut event_token = 0;
+      if let Err(error) = webview_with_auth.add_BasicAuthenticationRequested(
+        &auth_handler,
+        &mut event_token,
+      ) {
+        eprintln!("Failed to register WebView2 authentication handler: {error}");
+        return;
+      }
+
+      let url_wide: Vec<u16> = url
+        .as_str()
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+      if let Err(error) = core_webview.Navigate(PCWSTR::from_raw(url_wide.as_ptr())) {
+        eprintln!("Failed to navigate proxy window: {error}");
+        let _ = webview_with_auth.remove_BasicAuthenticationRequested(event_token);
+      }
+    }
+  })?;
 
   Ok(())
 }
@@ -216,15 +292,58 @@ struct LogWorkerState {
     cancel: std::sync::Mutex<Option<tokio_util::sync::CancellationToken>>,
 }
 
+fn proxy_base_url(proxy_host: &str) -> Result<reqwest::Url, String> {
+    let proxy_host = proxy_host.trim();
+    if proxy_host.is_empty() {
+        return Err("A proxy hostname or IP address is required.".into());
+    }
+    let authority = match proxy_host.parse::<std::net::Ipv6Addr>() {
+        Ok(ip) => format!("[{ip}]"),
+        Err(_) => proxy_host.to_string(),
+    };
+    let base = reqwest::Url::parse(&format!("https://{authority}:8082/"))
+        .map_err(|error| format!("Invalid proxy address: {error}"))?;
+    if !base.username().is_empty()
+        || base.password().is_some()
+        || base.port() != Some(8082)
+        || base.path() != "/"
+        || base.query().is_some()
+        || base.fragment().is_some()
+    {
+        return Err("Enter a hostname or IP address without a URL or path.".into());
+    }
+    Ok(base)
+}
+
 #[tauri::command]
 async fn start_logs(
     app: tauri::AppHandle,
     state: tauri::State<'_, LogWorkerState>, 
     ippr: &str, 
+    proxy_ip: &str,
     userpr: &str, 
-    passpr: &str
+    passpr: &str,
+    use_mock_data: bool,
 ) -> Result<(), String> {
     println!("start logs is running");
+    let url = if use_mock_data {
+        "http://127.0.0.1:5500/Policy/Trace/etuyon.html".to_string()
+    } else {
+        let base = proxy_base_url(proxy_ip)?;
+        let trace_url = reqwest::Url::parse(ippr)
+            .map_err(|error| format!("Invalid selected trace URL: {error}"))?;
+        if trace_url.scheme() != "https"
+            || trace_url.host_str() != base.host_str()
+            || trace_url.port() != Some(8082)
+            || !trace_url.path().starts_with("/Policy/Trace/")
+            || !trace_url.username().is_empty()
+            || trace_url.password().is_some()
+        {
+            return Err("The selected trace must belong to the configured proxy.".into());
+        }
+        trace_url.to_string()
+    };
+
     {
         let mut guard = state.cancel.lock().unwrap();
         if guard.is_some() { return Err("ya está corriendo".into()); }
@@ -232,10 +351,6 @@ async fn start_logs(
     }
     let token = state.cancel.lock().unwrap().as_ref().unwrap().clone();
 
-    // let ip = ippr.to_string(); <--- ORIGINAL
-    // let url = format!("https://{}:8082/Policy/Trace/proxytools", ip);  <--- ORIGINAL
-    // let url = ippr.to_string(); <--- ORIGINAL FIXED DINAMIC TRACE
-    let url = "http://127.0.0.1:5500/Policy/Trace/etuyon.html".to_string();
     let user = userpr.to_string();
     let pass = passpr.to_string();
     let interval_secs = 5;
@@ -246,7 +361,6 @@ async fn start_logs(
         let client = reqwest::Client::builder()
             .cookie_provider(jar)
             .user_agent("trace-tools/0.1")
-            .danger_accept_invalid_certs(true)
             .build()
             .expect("client");
 
@@ -350,22 +464,37 @@ async fn get_html_data(
     ippr: &str,
     userpr: &str,
     passpr: &str,
+    use_mock_data: bool,
 ) -> Result<HtmlData, String> {
 
-    // let url = format!("https://{}:8082/Policy", ippr); <--- ORIGINAL
-    let url = format!("http://127.0.0.1:5500/Policy.html");
+    let proxy_base = if use_mock_data {
+        None
+    } else {
+        Some(proxy_base_url(ippr)?)
+    };
+    let url = if use_mock_data {
+        reqwest::Url::parse("http://127.0.0.1:5500/Policy.html")
+            .expect("static mock URL is valid")
+    } else {
+        proxy_base
+            .as_ref()
+            .expect("live mode has a validated proxy URL")
+            .join("Policy")
+            .map_err(|error| format!("Could not build policy URL: {error}"))?
+    };
 
     let client = reqwest::Client::builder()
-        .danger_accept_invalid_certs(true)
         .user_agent("trace-tools/0.1")
         .build()
         .map_err(|e| e.to_string())?;
 
     let html = client
-        .get(&url)
+        .get(url.clone())
         .basic_auth(userpr, Some(passpr))
         .send()
         .await
+        .map_err(|e| e.to_string())?
+        .error_for_status()
         .map_err(|e| e.to_string())?
         .text()
         .await
@@ -398,33 +527,73 @@ async fn get_html_data(
 
             traces.push(TraceItem {
                 trace: name.to_string(),
-                url: format!("https://{}:8082{}", ippr, href),
+                url: match &proxy_base {
+                    Some(proxy_base) => proxy_base
+                        .join(href)
+                        .map_err(|error| format!("Invalid trace link: {error}"))?
+                        .to_string(),
+                    None => format!("https://{ippr}:8082{href}"),
+                },
             });
 
             continue;
         }
 
         // -------- files ----------
-        // let file_url = format!("https://{}:8082{}", ippr, href); <--- ORIGINAL
-        let file_url = format!("http://127.0.0.1:5500{}", href);
+        let file_url = if use_mock_data {
+            let mock_base = reqwest::Url::parse("http://127.0.0.1:5500/")
+                .expect("static mock base URL is valid");
+            let file_url = mock_base
+                .join(href)
+                .map_err(|error| format!("Invalid mock policy link: {error}"))?;
+            if file_url.scheme() != mock_base.scheme()
+                || file_url.host_str() != mock_base.host_str()
+                || file_url.port() != mock_base.port()
+            {
+                continue;
+            }
+            file_url
+        } else {
+            let file_url = proxy_base
+                .as_ref()
+                .expect("live mode has a validated proxy URL")
+                .join(href)
+                .map_err(|error| format!("Invalid policy link: {error}"))?;
+            if file_url.scheme() != "https"
+                || file_url.host_str()
+                    != proxy_base
+                        .as_ref()
+                        .expect("live mode has a validated proxy URL")
+                        .host_str()
+                || file_url.port() != Some(8082)
+                || !file_url.username().is_empty()
+                || file_url.password().is_some()
+            {
+                continue;
+            }
+            file_url
+        };
         let content = match client
-            .get(&file_url)
+            .get(file_url)
             .basic_auth(userpr, Some(passpr))
             .send()
             .await
         {
-            Ok(response) => match response.text().await {
-                Ok(text) => {
-                    let text = html_escape::decode_html_entities(&text).into_owned();
-                
-                    if let Some(cap) = re_pre.captures(&text) {
-                        cap.get(1)
-                            .map(|m| m.as_str().trim().to_string())
-                            .unwrap_or_default()
-                    } else {
-                        text
+            Ok(response) => match response.error_for_status() {
+                Ok(response) => match response.text().await {
+                    Ok(text) => {
+                        let text = html_escape::decode_html_entities(&text).into_owned();
+
+                        if let Some(cap) = re_pre.captures(&text) {
+                            cap.get(1)
+                                .map(|m| m.as_str().trim().to_string())
+                                .unwrap_or_default()
+                        } else {
+                            text
+                        }
                     }
-                }
+                    Err(_) => String::new(),
+                },
                 Err(_) => String::new(),
             },
             Err(_) => String::new(),

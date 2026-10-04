@@ -3,7 +3,12 @@
 /** biome-ignore-all lint/a11y/noStaticElementInteractions: <> */
 'use client';
 import { invoke } from '@tauri-apps/api/core';
-import { Activity, FileText, Network, ShieldCheck } from 'lucide-react';
+import {
+  Activity,
+  FileText,
+  Network,
+  ShieldCheck,
+} from 'lucide-react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState } from 'react';
@@ -16,7 +21,8 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { getLocalStorage } from '@/lib/utilsClient';
+import getCredentials from '@/lib/getCredentials';
+import useDataSourceMode from '@/lib/useDataSourceMode';
 
 export default function Page() {
   return (
@@ -61,15 +67,28 @@ function PageBase() {
   const [loadStatus, setLoadStatus] = useState<
     'loading' | 'loaded' | 'error'
   >('loading');
-  const credentials = getLocalStorage<Credentials>(
-    'one-time-credentials',
-  );
+  const { mode, ready: modeReady } = useDataSourceMode();
 
   useEffect(() => {
+    if (!modeReady) return;
+    setLoadStatus('loading');
+    setHtmlData(null);
+    setPolicyFileSelected(null);
+    const credentials = getCredentials();
+    const proxy = searchParams.get('proxy') || '';
+    if (!proxy || !credentials) {
+      setLoadStatus('error');
+      toast.error(
+        !proxy ? 'No proxy selected.' : 'Credentials not found.',
+      );
+      return;
+    }
+
     const traces = invoke('get_html_data', {
-      ippr: searchParams.get('proxy') || '',
-      userpr: credentials?.username,
-      passpr: credentials?.password,
+      ippr: proxy,
+      userpr: credentials.username,
+      passpr: credentials.password,
+      useMockData: mode === 'mock',
     });
 
     toast.promise(traces, {
@@ -85,7 +104,7 @@ function PageBase() {
         return `Error getting trace data: ${e}`;
       },
     });
-  }, []);
+  }, [mode, modeReady, searchParams]);
 
   const proxy = searchParams.get('proxy');
 
@@ -116,7 +135,10 @@ function PageBase() {
         )}
       </header>
 
-      <section className='flex flex-col gap-4' aria-labelledby='traces-title'>
+      <section
+        className='flex flex-col gap-4'
+        aria-labelledby='traces-title'
+      >
         <div className='flex items-end justify-between gap-3'>
           <div>
             <h2 id='traces-title' className='text-xl font-semibold'>
@@ -127,7 +149,9 @@ function PageBase() {
             </p>
           </div>
           {loadStatus === 'loaded' && (
-            <Badge variant='outline'>{htmlData?.traces.length ?? 0}</Badge>
+            <Badge variant='outline'>
+              {htmlData?.traces.length ?? 0}
+            </Badge>
           )}
         </div>
 
@@ -137,7 +161,8 @@ function PageBase() {
           </div>
         ) : loadStatus === 'error' ? (
           <div className='rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground'>
-            Could not load proxy data. Check the connection or reopen this page.
+            Could not load proxy data. Check the connection or reopen
+            this page.
           </div>
         ) : htmlData?.traces.length ? (
           <div className='grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3'>
@@ -178,7 +203,10 @@ function PageBase() {
         )}
       </section>
 
-      <section className='flex flex-col gap-4' aria-labelledby='policies-title'>
+      <section
+        className='flex flex-col gap-4'
+        aria-labelledby='policies-title'
+      >
         <div>
           <h2 id='policies-title' className='text-xl font-semibold'>
             Policy files
@@ -195,7 +223,8 @@ function PageBase() {
               Policy explorer
             </CardTitle>
             <CardDescription>
-              {policyFileSelected?.name ?? 'Select a policy file from the list'}
+              {policyFileSelected?.name ??
+                'Select a policy file from the list'}
             </CardDescription>
           </CardHeader>
 
@@ -286,7 +315,9 @@ function PageBase() {
         </div>
         <div className='grid grid-cols-1 gap-3 sm:grid-cols-2'>
           <Card className='gap-2 p-4'>
-            <CardTitle className='text-sm'>Logs traffic analysis</CardTitle>
+            <CardTitle className='text-sm'>
+              Logs traffic analysis
+            </CardTitle>
             <CardDescription>
               Correlated analysis of proxy log events.
             </CardDescription>
