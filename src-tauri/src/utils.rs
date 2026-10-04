@@ -36,8 +36,12 @@ static RE_VERDICT:       Lazy<Regex> = Lazy::new(|| Regex::new(r"(?mi)^\s*verdic
 static RE_CATS_RAW:      Lazy<Regex> = Lazy::new(|| Regex::new(r"(?mi)^\s*url\.category:\s*([^\r\n]+)").unwrap());
 static RE_CATGR_RAW:     Lazy<Regex> = Lazy::new(|| Regex::new(r"(?mi)^\s*category groups:\s*([^\r\n]+)").unwrap());
 
-static RE_HDR:           Lazy<Regex> = Lazy::new(|| Regex::new(r"(?mi)^\s*<\s*(?:(?:proxy|cache)|[A-Za-z][\w.-]*@[A-Za-z0-9._-]+)\s*>\s*(?:\[[^\]]*\]\s*)*$").unwrap());
+// Policy layer headers may have an inline condition after their [layer]/[vpm-cpl] tags.
+// Recognize the whole line as a new header so its following MATCH lines are not
+// accidentally grouped under the previous policy layer.
+static RE_HDR:           Lazy<Regex> = Lazy::new(|| Regex::new(r"(?mi)^\s*<\s*(?:(?:proxy|cache)|[A-Za-z][\w.-]*@[A-Za-z0-9._-]+)\s*>\s*(?:\[[^\]]*\]\s*)*(?:condition\s*=.*)?$").unwrap());
 static RE_MATCH:         Lazy<Regex> = Lazy::new(|| Regex::new(r"(?m)^\s*MATCH:\s*(.+)$").unwrap());
+static RE_MISS:          Lazy<Regex> = Lazy::new(|| Regex::new(r"(?mi)^\s*miss:\s*(.+)$").unwrap());
 
 static RE_COND_NAME:  Lazy<Regex> = Lazy::new(|| Regex::new(r#"(?m)^\s*condition\s+("([^"]+)"|[^\s]+)\s*$"#).unwrap());
 static RE_ASSIGNED_KV: Lazy<Regex> = Lazy::new(|| Regex::new(r#"(?m)^\s*([A-Za-z0-9_.-]+)=(.*)\s*$"#).unwrap());
@@ -83,6 +87,7 @@ pub fn get_regex(name: &str) -> Option<&'static Regex> {
 
     "re_hdr"           => Some(&RE_HDR),
     "re_match"         => Some(&RE_MATCH),
+    "re_miss"          => Some(&RE_MISS),
 
     "re_cond_name"     => Some(&RE_COND_NAME),
     "re_assigned_kv"   => Some(&RE_ASSIGNED_KV),
@@ -225,12 +230,31 @@ pub fn append_json_for_blocks(
                 continue;
             }
 
-            if get_regex("re_hdr").expect("regex no inicializado").is_match(line) {
+            let match_content = get_regex("re_match")
+                .expect("regex no inicializado")
+                .captures(line)
+                .and_then(|c| c.get(1))
+                .map(|m| m.as_str().trim());
+            let header = if get_regex("re_hdr")
+                .expect("regex no inicializado")
+                .is_match(line)
+            {
+                Some(line.trim())
+            } else {
+                match_content.filter(|content| {
+                    get_regex("re_hdr")
+                        .expect("regex no inicializado")
+                        .is_match(content)
+                })
+            };
+
+            // A MATCH payload can itself be a Proxy Guard layer header.
+            if let Some(header) = header {
                 if let (Some(h), true) = (&current_header, !current_matches.is_empty()) {
                     let matches = mem::take(&mut current_matches);
                     policy_groups.push(json!({ "header": h, "matches": matches }));
                 }
-                current_header = Some(line.trim().to_string());
+                current_header = Some(header.to_string());
                 continue;
             }
 
@@ -239,6 +263,15 @@ pub fn append_json_for_blocks(
                 if current_header.is_some() {
                     let m = c.get(1).unwrap().as_str().trim().to_string();
                     if !m.is_empty() { current_matches.push(m); }
+                }
+            }
+
+            if current_header.is_some() {
+                if let Some(c) = get_regex("re_miss")
+                    .expect("regex no inicializado")
+                    .captures(line)
+                {
+                    current_matches.push(c.get(0).unwrap().as_str().trim().to_string());
                 }
             }
         }
@@ -376,4 +409,42 @@ pub fn append_json_for_blocks(
     }
 
     Ok(json_vec)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::append_json_for_blocks;
+    use std::{fs::{self, File}, time::{SystemTime, UNIX_EPOCH}};
+
+    #[test]
+    fn guard_layer_headers_and_misses_are_grouped_with_their_layer() {
+        let block = concat!(
+            "<Proxy> [layer 11] [vpm-cpl:31522]\n",
+            "MATCH: condition=internal-condition\n",
+            "MATCH: <Proxy> [layer 12] [vpm-cpl:31553] condition=!CombLista_Blanca\n",
+            "miss: CombLista_Blanca\n",
+            "MATCH: <Proxy> [layer 13] [vpm-cpl:31607] condition=!Lista_Blanca\n",
+            "miss: Lista_Blanca\n",
+        );
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("proxytools-parser-{unique}.jsonl"));
+        let mut file = File::create(&path).unwrap();
+
+        let encoded = append_json_for_blocks(&[block.to_string()], &mut file).unwrap();
+        let transaction: serde_json::Value = serde_json::from_str(&encoded[0]).unwrap();
+        let groups = transaction["policyMatches"].as_array().unwrap();
+
+        assert_eq!(groups.len(), 3);
+        assert_eq!(groups[0]["matches"][0], "condition=internal-condition");
+        assert_eq!(groups[1]["header"], "<Proxy> [layer 12] [vpm-cpl:31553] condition=!CombLista_Blanca");
+        assert_eq!(groups[1]["matches"][0], "miss: CombLista_Blanca");
+        assert_eq!(groups[2]["header"], "<Proxy> [layer 13] [vpm-cpl:31607] condition=!Lista_Blanca");
+        assert_eq!(groups[2]["matches"][0], "miss: Lista_Blanca");
+
+        drop(file);
+        fs::remove_file(path).unwrap();
+    }
 }
