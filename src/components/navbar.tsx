@@ -103,7 +103,7 @@
 
 'use client';
 
-import { ChevronLeft } from 'lucide-react';
+import { BookOpen, ChevronLeft } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
@@ -113,6 +113,7 @@ const LABELS: Record<string, string> = {
   trace: 'Trace',
   config: 'Config',
   settings: 'Settings',
+  documentation: 'Documentation',
   another: 'Another',
 };
 
@@ -168,7 +169,18 @@ export default function Navbar() {
           </div>
         ))}
       </div>
-      <ConfigMenu className='ml-auto' />
+      <div className='ml-auto flex items-center gap-1'>
+        <Button asChild variant='ghost' size='icon'>
+          <Link
+            href='/documentation'
+            aria-label='Open documentation'
+            title='Documentation'
+          >
+            <BookOpen className='size-4' />
+          </Link>
+        </Button>
+        <ConfigMenu />
+      </div>
     </nav>
   );
 }
