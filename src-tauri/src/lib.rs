@@ -292,6 +292,34 @@ struct LogWorkerState {
     cancel: std::sync::Mutex<Option<tokio_util::sync::CancellationToken>>,
 }
 
+fn describe_request_error(action: &str, url: &reqwest::Url, error: reqwest::Error) -> String {
+    if let Some(status) = error.status() {
+        return match status.as_u16() {
+            401 => format!("Authentication failed while {action} (HTTP 401). Check the saved proxy credentials."),
+            403 => format!("The proxy denied the request while {action} (HTTP 403)."),
+            _ => format!("The proxy returned HTTP {status} while {action} from {url}."),
+        };
+    }
+
+    if error.is_timeout() {
+        return format!("The request timed out while {action} from {url}. Check the proxy availability and network connection.");
+    }
+
+    if error.is_connect() {
+        return format!("Could not connect while {action} from {url}. Check the proxy address, port, network access, and TLS compatibility. Details: {error}");
+    }
+
+    format!("Could not complete the request while {action} from {url}. Details: {error}")
+}
+
+fn describe_status_error(action: &str, url: &reqwest::Url, status: reqwest::StatusCode) -> String {
+    match status.as_u16() {
+        401 => format!("Authentication failed while {action} (HTTP 401). Check the saved proxy credentials."),
+        403 => format!("The proxy denied the request while {action} (HTTP 403)."),
+        _ => format!("The proxy returned HTTP {status} while {action} from {url}."),
+    }
+}
+
 fn proxy_base_url(proxy_host: &str) -> Result<reqwest::Url, String> {
     let proxy_host = proxy_host.trim();
     if proxy_host.is_empty() {
@@ -361,6 +389,7 @@ async fn start_logs(
         let client = reqwest::Client::builder()
             .cookie_provider(jar)
             .user_agent("trace-tools/0.1")
+            .danger_accept_invalid_certs(true)
             .build()
             .expect("client");
 
@@ -379,6 +408,7 @@ async fn start_logs(
         let mut blocks_in_mem: Vec<String> = Vec::new();
         let mut blocks_json_in_mem: Vec<String> = Vec::new();
         let mut ids: HashSet<u64> = HashSet::with_capacity(50_000);
+        let mut last_error: Option<String> = None;
 
         println!("starting log worker for url: {}", url);
         while !token.is_cancelled() {
@@ -387,12 +417,36 @@ async fn start_logs(
                 req = req.basic_auth(&user, Some(&pass)); 
             }
             println!("requesting: {}", url);
-            if let Ok(resp) = req.send().await {
-                let status = resp.status();
-                let html_coded = resp.text().await.unwrap_or_default();
-                let html = html_escape::decode_html_entities(&html_coded).into_owned();
+            match req.send().await {
+                Ok(resp) => {
+                    let status = resp.status();
+                    if !status.is_success() {
+                        let request_url = reqwest::Url::parse(&url).unwrap();
+                        let message = describe_status_error("fetching trace data", &request_url, status);
+                        if last_error.as_deref() != Some(message.as_str()) {
+                            let _ = app.emit("logs:error", &message);
+                        }
+                        last_error = Some(message);
+                        tokio::time::sleep(Duration::from_secs(interval_secs)).await;
+                        continue;
+                    }
+                    let html_coded = match resp.text().await {
+                        Ok(text) => text,
+                        Err(error) => {
+                            let request_url = reqwest::Url::parse(&url).unwrap();
+                            let message = describe_request_error("reading trace data", &request_url, error);
+                            if last_error.as_deref() != Some(message.as_str()) {
+                                let _ = app.emit("logs:error", &message);
+                            }
+                            last_error = Some(message);
+                            tokio::time::sleep(Duration::from_secs(interval_secs)).await;
+                            continue;
+                        }
+                    };
+                    last_error = None;
+                    let html = html_escape::decode_html_entities(&html_coded).into_owned();
 
-                if status.is_success() && !html.is_empty() {
+                    if !html.is_empty() {
                     let new_blocks: Vec<String> = get_regex("re_block")
                             .expect("regex no inicializado")
                             .find_iter(&html) 
@@ -419,6 +473,15 @@ async fn start_logs(
                             raw: appended_blocks,
                         });
                     }
+                }
+                }
+                Err(error) => {
+                    let request_url = reqwest::Url::parse(&url).unwrap();
+                    let message = describe_request_error("fetching trace data", &request_url, error);
+                    if last_error.as_deref() != Some(message.as_str()) {
+                        let _ = app.emit("logs:error", &message);
+                    }
+                    last_error = Some(message);
                 }
             }
             tokio::time::sleep(Duration::from_secs(interval_secs)).await;
@@ -483,22 +546,27 @@ async fn get_html_data(
             .map_err(|error| format!("Could not build policy URL: {error}"))?
     };
 
+    let jar = Arc::new(CookieStoreMutex::new(CookieStore::default()));
     let client = reqwest::Client::builder()
+        .cookie_provider(jar)
         .user_agent("trace-tools/0.1")
+        .danger_accept_invalid_certs(true)
         .build()
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| format!("Could not prepare the proxy request: {error}"))?;
 
-    let html = client
-        .get(url.clone())
-        .basic_auth(userpr, Some(passpr))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?
-        .error_for_status()
-        .map_err(|e| e.to_string())?
-        .text()
-        .await
-        .map_err(|e| e.to_string())?;
+    let mut policy_request = client.get(url.clone());
+    if !userpr.is_empty() && !passpr.is_empty() {
+        policy_request = policy_request.basic_auth(userpr, Some(passpr));
+    }
+    let policy_response = policy_request.send().await.map_err(|error| {
+        describe_request_error("fetching the policy index", &url, error)
+    })?;
+    let policy_response = policy_response.error_for_status().map_err(|error| {
+        describe_request_error("fetching the policy index", &url, error)
+    })?;
+    let html = policy_response.text().await.map_err(|error| {
+        describe_request_error("reading the policy index", &url, error)
+    })?;
 
     let html = html_escape::decode_html_entities(&html).into_owned();
 
@@ -573,30 +641,26 @@ async fn get_html_data(
             }
             file_url
         };
-        let content = match client
-            .get(file_url)
-            .basic_auth(userpr, Some(passpr))
-            .send()
-            .await
-        {
-            Ok(response) => match response.error_for_status() {
-                Ok(response) => match response.text().await {
-                    Ok(text) => {
-                        let text = html_escape::decode_html_entities(&text).into_owned();
-
-                        if let Some(cap) = re_pre.captures(&text) {
-                            cap.get(1)
-                                .map(|m| m.as_str().trim().to_string())
-                                .unwrap_or_default()
-                        } else {
-                            text
-                        }
-                    }
-                    Err(_) => String::new(),
-                },
-                Err(_) => String::new(),
-            },
-            Err(_) => String::new(),
+        let mut file_request = client.get(file_url.clone());
+        if !userpr.is_empty() && !passpr.is_empty() {
+            file_request = file_request.basic_auth(userpr, Some(passpr));
+        }
+        let response = file_request.send().await.map_err(|error| {
+            describe_request_error(&format!("fetching policy file '{name}'"), &file_url, error)
+        })?;
+        let response = response.error_for_status().map_err(|error| {
+            describe_request_error(&format!("fetching policy file '{name}'"), &file_url, error)
+        })?;
+        let text = response.text().await.map_err(|error| {
+            describe_request_error(&format!("reading policy file '{name}'"), &file_url, error)
+        })?;
+        let text = html_escape::decode_html_entities(&text).into_owned();
+        let content = if let Some(cap) = re_pre.captures(&text) {
+            cap.get(1)
+                .map(|m| m.as_str().trim().to_string())
+                .unwrap_or_default()
+        } else {
+            text
         };
         
         files.push(FileLink {

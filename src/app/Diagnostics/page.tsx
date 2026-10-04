@@ -47,6 +47,16 @@ type Trace = {
   url: string;
 };
 
+function errorMessage(error: unknown) {
+  if (typeof error === 'string') return error;
+  if (error instanceof Error) return error.message;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
 function linesOnText(text: string) {
   if (!text) return '';
   const lines = text.split('\n');
@@ -92,7 +102,7 @@ function PageBase() {
     });
 
     toast.promise(traces, {
-      loading: 'Getting trace data...',
+      loading: 'Getting policy and trace data...',
       success: (r) => {
         setHtmlData(r as HtmlData);
         setLoadStatus('loaded');
@@ -101,7 +111,7 @@ function PageBase() {
       },
       error: (e) => {
         setLoadStatus('error');
-        return `Error getting trace data: ${e}`;
+        return `Could not load policy and trace data: ${errorMessage(e)}`;
       },
     });
   }, [mode, modeReady, searchParams]);

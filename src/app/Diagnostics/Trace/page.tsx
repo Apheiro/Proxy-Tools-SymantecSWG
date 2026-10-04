@@ -34,6 +34,16 @@ interface Logs {
   json: string[];
 }
 
+function errorMessage(error: unknown) {
+  if (typeof error === 'string') return error;
+  if (error instanceof Error) return error.message;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
 export default function Page() {
   return (
     <Suspense fallback={<div>Loading</div>}>
@@ -73,6 +83,7 @@ function PageBase() {
   useEffect(() => {
     if (!modeReady) return;
     let unlisten: UnlistenFn | null = null;
+    let unlistenError: UnlistenFn | null = null;
     const credentials = getCredentials();
     const ipTraceProxy = searchParams.get('traceUrl') || null;
     const proxyIp = searchParams.get('proxy') || '';
@@ -113,6 +124,9 @@ function PageBase() {
         setJsonLogs((j) => [...json, ...j]);
         setRawLogs((r) => [...raw, ...r]);
       });
+      unlistenError = await listen<string>('logs:error', (event) => {
+        toast.error(`Trace request failed: ${event.payload}`);
+      });
       console.log('logs start with start_logs');
       const start = invoke('start_logs', {
         ippr: ipTraceProxy,
@@ -128,14 +142,17 @@ function PageBase() {
           return 'Logs started successfully.';
         },
         error: (e) => {
-          return `Error starting logs: ${e}`;
+          return `Could not start trace collection: ${errorMessage(e)}`;
         },
       });
-    })();
+    })().catch((error: unknown) => {
+      toast.error(`Could not start trace collection: ${errorMessage(error)}`);
+    });
 
     return () => {
       console.log('leaving trace page');
       unlisten?.();
+      unlistenError?.();
       void invoke('stop_logs');
     };
   }, [mode, modeReady, searchParams]);
