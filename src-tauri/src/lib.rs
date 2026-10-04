@@ -194,7 +194,9 @@ struct TraceLog {
     nslookup: String,
     active: bool,
     last_check: String,
-    hostinfo: HostInfo
+    hostinfo: HostInfo,
+    registered_address: String,
+    primary_address: String,
 }
 
 #[derive(Serialize)]
@@ -215,10 +217,10 @@ fn get_host_info(nslookup: &str) -> Option<HostInfo> {
             let dns   = caps.name("server").map(|m| m.as_str()).unwrap_or("unkown");
             let dns_ip = caps.name("server_ip").map(|m| m.as_str()).unwrap_or("unkown");
             let host     = caps.name("host").map(|m| m.as_str()).unwrap_or("unkown");
-            let host_ip  = caps.name("host_ip").map(|m| m.as_str()).unwrap_or("unkown");
+            let host_ip  = caps.name("host_ip").map(|m| m.as_str()).unwrap_or("unknown");
             HostInfo {
                 hostname: host.to_string(),
-                ip: host_ip.to_string(),
+                ip: host_ip.split_whitespace().collect::<Vec<_>>().join(" "),
                 dnsname: dns.to_string(),
                 dnsip: dns_ip.to_string(),
             }
@@ -227,6 +229,21 @@ fn get_host_info(nslookup: &str) -> Option<HostInfo> {
     };
 
     return Some(results);
+}
+
+fn is_single_ip(value: &str) -> bool {
+    let mut addresses = value.split_whitespace();
+    matches!((addresses.next(), addresses.next()), (Some(address), None) if address.parse::<std::net::IpAddr>().is_ok())
+}
+
+fn resolved_ip_from_ping(pinglog: &str) -> Option<String> {
+    let address_pattern = Regex::new(r"\[([^\]]+)\]").unwrap();
+    let resolved_ip = address_pattern
+        .captures_iter(pinglog)
+        .filter_map(|captures| captures.get(1).map(|capture| capture.as_str()))
+        .find(|address| address.parse::<std::net::IpAddr>().is_ok())
+        .map(str::to_string);
+    resolved_ip
 }
 
 
@@ -257,18 +274,54 @@ async fn getproxystatus(hostname: &str) -> Result<TraceLog, String> {
     let notfound = Regex::new("Ping request could not find host").unwrap();
 
     let active = !(packetloss.is_match(&stdoutping) || timeoutregex.is_match(&stdoutping) || unreachable.is_match(&stdoutping) || notfound.is_match(&stdoutping));
-    let hostinfo = get_host_info(&stdoutnslookup).expect("Error getting host info");  
-    
-    println!("hostname?: {}", hostinfo.hostname.split('.').collect::<Vec<&str>>()[0].to_string());
+    let requested_is_ip = hostname.parse::<std::net::IpAddr>().is_ok();
+    let mut hostinfo = get_host_info(&stdoutnslookup).unwrap_or_else(|| HostInfo {
+        hostname: "unknown".to_string(),
+        ip: "unknown".to_string(),
+        dnsname: "unknown".to_string(),
+        dnsip: "unknown".to_string(),
+    });
+
+    let has_resolved_hostname = !matches!(
+        hostinfo.hostname.to_ascii_lowercase().as_str(),
+        "unknown" | "unkown"
+    );
+    if !has_resolved_hostname && !requested_is_ip {
+        hostinfo.hostname = hostname.to_string();
+    }
+    if matches!(hostinfo.ip.to_ascii_lowercase().as_str(), "unknown" | "unkown") {
+        if requested_is_ip {
+            hostinfo.ip = hostname.to_string();
+        } else if let Some(resolved_ip) = resolved_ip_from_ping(&stdoutping) {
+            hostinfo.ip = resolved_ip;
+        }
+    }
+
+    let primary_address = if requested_is_ip {
+        hostname.to_string()
+    } else if active && is_single_ip(&hostinfo.ip) {
+        hostinfo.ip.clone()
+    } else {
+        hostname.to_string()
+    };
+    let display_hostname = if has_resolved_hostname {
+        hostinfo.hostname.split('.').next().unwrap_or(hostname).to_string()
+    } else {
+        hostname.to_string()
+    };
+
+    println!("hostname?: {}", display_hostname);
     
     Ok( 
         TraceLog {
             pinglog: stdoutping.to_string(),
-            hostname: hostinfo.hostname.split('.').collect::<Vec<&str>>()[0].to_string(),
+            hostname: display_hostname,
             nslookup: stdoutnslookup.to_string(),
             active,
             last_check: Utc::now().to_rfc3339(),
-            hostinfo
+            hostinfo,
+            registered_address: hostname.to_string(),
+            primary_address,
         } 
     )
 }

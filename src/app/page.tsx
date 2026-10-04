@@ -40,47 +40,186 @@ const schema = v.object({
   ),
 });
 
+function knownProxyValue(value?: string) {
+  const normalized = value?.trim();
+  const normalizedLowercase = normalized?.toLowerCase();
+  return normalized &&
+    normalizedLowercase !== 'unknown' &&
+    normalizedLowercase !== 'unkown'
+    ? normalized
+    : undefined;
+}
+
+function isIpAddress(value?: string) {
+  if (!value || value.trim() !== value || /\s/.test(value)) return false;
+  if (value.includes(':')) {
+    try {
+      return new URL(`http://[${value}]/`).hostname.length > 0;
+    } catch {
+      return false;
+    }
+  }
+  const octets = value.split('.');
+  return (
+    octets.length === 4 &&
+    octets.every((octet) =>
+      /^\d{1,3}$/.test(octet) && Number(octet) >= 0 && Number(octet) <= 255,
+    )
+  );
+}
+
+function getLoggedHostname(proxy: Proxy) {
+  const pingTarget = proxy.pinglog?.match(
+    /Pinging\s+([^\s[]+)(?:\s+\[([^\]]+)\])?/i,
+  )?.[1];
+  if (knownProxyValue(pingTarget) && !isIpAddress(pingTarget)) {
+    return pingTarget;
+  }
+
+  const dnsQuery = proxy.nslookup?.match(/can't find\s+([^\s:]+)/i)?.[1];
+  return knownProxyValue(dnsQuery) && !isIpAddress(dnsQuery)
+    ? dnsQuery
+    : undefined;
+}
+
+function getProxyPrimaryAddress(proxy: Proxy) {
+  const primaryAddress = knownProxyValue(proxy.primary_address);
+  if (primaryAddress) return primaryAddress;
+
+  const resolvedIp = knownProxyValue(proxy.hostinfo?.ip);
+  if (isIpAddress(resolvedIp)) return resolvedIp;
+
+  const registeredAddress = knownProxyValue(proxy.registered_address);
+  if (registeredAddress) return registeredAddress;
+
+  const hostname = knownProxyValue(proxy.hostname);
+  if (hostname) return hostname;
+
+  const pingTarget = proxy.pinglog?.match(
+    /Pinging\s+([^\s[]+)(?:\s+\[([^\]]+)\])?/i,
+  );
+  if (isIpAddress(pingTarget?.[2])) return pingTarget?.[2];
+  if (knownProxyValue(pingTarget?.[1])) return pingTarget?.[1];
+
+  const dnsQuery = proxy.nslookup?.match(/can't find\s+([^\s:]+)/i)?.[1];
+  return knownProxyValue(dnsQuery) ?? null;
+}
+
+function mergeProxyCheck(previous: Proxy, check: Proxy): Proxy {
+  const keepKnown = (latest?: string, saved?: string) =>
+    knownProxyValue(latest) ?? knownProxyValue(saved) ?? 'unknown';
+  const checkedPrimary = knownProxyValue(check.primary_address);
+
+  return {
+    ...previous,
+    ...check,
+    hostname: keepKnown(check.hostname, previous.hostname),
+    registered_address:
+      knownProxyValue(previous.registered_address) ??
+      knownProxyValue(check.registered_address) ??
+      knownProxyValue(previous.hostname) ??
+      knownProxyValue(check.hostname),
+    primary_address:
+      checkedPrimary ?? getProxyPrimaryAddress(previous) ?? undefined,
+    hostinfo: {
+      hostname: keepKnown(check.hostinfo?.hostname, previous.hostinfo?.hostname),
+      ip: keepKnown(check.hostinfo?.ip, previous.hostinfo?.ip),
+      dnsname: keepKnown(check.hostinfo?.dnsname, previous.hostinfo?.dnsname),
+      dnsip: keepKnown(check.hostinfo?.dnsip, previous.hostinfo?.dnsip),
+    },
+  };
+}
+
 export default function Page() {
   const [proxies, setProxies] = useState<Proxy[]>([]);
   const [disable, setDisable] = useState(false);
   const [disableReCheck, setDisableReCheck] = useState(false);
 
   useEffect(() => {
-    setProxies(getLocalStorage('proxies') || []);
+    const storedProxies: Proxy[] = getLocalStorage('proxies') || [];
+    const normalizedProxies = storedProxies.map((proxy) => {
+      const recoveredHostname =
+        knownProxyValue(proxy.hostname) ??
+        knownProxyValue(proxy.hostinfo?.hostname) ??
+        getLoggedHostname(proxy);
+      const primaryAddress = getProxyPrimaryAddress(proxy);
+
+      return {
+        ...proxy,
+        registered_address:
+          knownProxyValue(proxy.registered_address) ??
+          recoveredHostname ??
+          primaryAddress ??
+          undefined,
+        primary_address: primaryAddress ?? proxy.primary_address,
+        hostname: recoveredHostname ?? proxy.hostname,
+        hostinfo: {
+          ...proxy.hostinfo,
+          hostname:
+            knownProxyValue(proxy.hostinfo?.hostname) ??
+            recoveredHostname ??
+            'unknown',
+          ip:
+            knownProxyValue(proxy.hostinfo?.ip) ??
+            (isIpAddress(primaryAddress) ? primaryAddress : 'unknown'),
+        },
+      };
+    });
+    setProxies(normalizedProxies);
+    if (
+      normalizedProxies.some(
+        (proxy, index) =>
+          proxy.primary_address !== storedProxies[index]?.primary_address ||
+          proxy.registered_address !==
+            storedProxies[index]?.registered_address ||
+          proxy.hostname !== storedProxies[index]?.hostname ||
+          proxy.hostinfo.ip !== storedProxies[index]?.hostinfo?.ip ||
+          proxy.hostinfo.hostname !==
+            storedProxies[index]?.hostinfo?.hostname,
+      )
+    ) {
+      postLocalStorage('proxies', normalizedProxies);
+    }
     if (getCredentials('one-time-credentials')) {
       deleteLocalStorage('one-time-credentials');
     }
   }, []);
 
   const reCheckProxies = () => {
-    const blockOfPromises: Promise<Proxy>[] = [];
     setDisableReCheck(true);
-    for (const proxy of proxies) {
-      if (proxy.hostinfo.ip.split(' ').length === 1)
-        blockOfPromises.push(
-          invoke<Proxy>('getproxystatus', {
-            hostname: proxy.hostinfo.ip,
-          }),
-        );
-    }
-    toast.promise<Proxy[]>(Promise.all(blockOfPromises), {
-      loading: 'Updating proxies status...',
-      success: (result: Proxy[]) => {
+    const updatePromise = Promise.all(
+      proxies.map(async (proxy) => {
+        // Preserve the existing behavior of not rechecking ambiguous multi-IP hosts.
+        if (proxy.hostinfo.ip.split(/\s+/).filter(Boolean).length > 1) {
+          return proxy;
+        }
+        const address = getProxyPrimaryAddress(proxy);
+        if (!address) return proxy;
+
+        const check = await invoke<Proxy>('getproxystatus', {
+          hostname: address,
+        });
+        return mergeProxyCheck(proxy, check);
+      }),
+    )
+      .then((result) => {
         postLocalStorage('proxies', result);
-        setDisableReCheck(false);
         setProxies(result);
-        return 'Proxies updated successfully.';
-      },
+        return result;
+      })
+      .finally(() => setDisableReCheck(false));
+
+    toast.promise<Proxy[]>(updatePromise, {
+      loading: 'Updating proxies status...',
+      success: () => 'Proxies updated successfully.',
       error: (e) => `Error checking proxies: ${e}`,
     });
   };
 
-  const deleteProxy = (ip: string) => {
-    postLocalStorage(
-      'proxies',
-      proxies.filter((p: Proxy) => p.hostinfo.ip !== ip),
-    );
-    setProxies(proxies.filter((p: Proxy) => p.hostinfo.ip !== ip));
+  const deleteProxy = (proxyToDelete: Proxy) => {
+    const updatedProxies = proxies.filter((proxy) => proxy !== proxyToDelete);
+    postLocalStorage('proxies', updatedProxies);
+    setProxies(updatedProxies);
   };
   const addProxy = (hostname: string) => {
     setDisable(true);
@@ -88,7 +227,10 @@ export default function Page() {
       some(
         proxies,
         (p: Proxy) =>
-          p.hostinfo.ip === hostname || p.hostname === hostname,
+          p.hostinfo.ip === hostname ||
+          p.hostname === hostname ||
+          p.registered_address === hostname ||
+          p.primary_address === hostname,
       )
     ) {
       setDisable(false);
@@ -105,7 +247,10 @@ export default function Page() {
           setProxies([...proxies, result]);
           return 'Proxy added successfully.';
         },
-        error: (e) => `Error adding proxy: ${e}`,
+        error: (e) => {
+          setDisable(false);
+          return `Error adding proxy: ${e}`;
+        },
       },
     );
   };
@@ -240,7 +385,11 @@ export default function Page() {
           <div className='grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3'>
             {proxies.map((proxy) => (
               <ProxyCard
-                key={proxy.hostinfo.ip}
+                key={
+                  proxy.registered_address ||
+                  proxy.primary_address ||
+                  proxy.hostname
+                }
                 proxy={proxy}
                 deleteProxy={deleteProxy}
               />

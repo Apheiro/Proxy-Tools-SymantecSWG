@@ -14,6 +14,10 @@ declare interface Proxy {
   active: boolean;
   last_check: string;
   hostinfo: Hostinfo;
+  /** Original value entered by the user; retained after IP discovery. */
+  registered_address?: string;
+  /** Stable address used for future checks; promoted from hostname to IP after resolution. */
+  primary_address?: string;
 }
 
 declare interface Credentials {

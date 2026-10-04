@@ -165,7 +165,7 @@ function DelAlert({
 }: {
   open: boolean;
   setOpen: (open: boolean) => void;
-  deleteProxy: (ip: string) => void;
+  deleteProxy: (proxy: Proxy) => void;
   proxy: Proxy;
 }) {
   const [deleteProx, setDelete] = useState(false);
@@ -174,7 +174,7 @@ function DelAlert({
     <AlertDialog open={open} onOpenChange={setOpen}>
       <AlertDialogContent
         onAnimationEnd={() => {
-          if (deleteProx) deleteProxy(proxy.hostinfo.ip);
+          if (deleteProx) deleteProxy(proxy);
         }}
       >
         <AlertDialogHeader>
@@ -220,7 +220,7 @@ export default function ProxyCard({
   deleteProxy,
 }: {
   proxy: Proxy;
-  deleteProxy: (ip: string) => void;
+  deleteProxy: (proxy: Proxy) => void;
 }) {
   const [openLog, setOpenLog] = useState(false);
   const [delAlert, setOpenAlert] = useState(false);
@@ -228,6 +228,13 @@ export default function ProxyCard({
   const [pendingProxyUrl, setPendingProxyUrl] = useState<
     string | null
   >(null);
+  const proxyAddress =
+    proxy.primary_address && proxy.primary_address !== 'unknown'
+      ? proxy.primary_address
+      : proxy.hostinfo.ip !== 'unknown' &&
+          proxy.hostinfo.ip.split(/\s+/).filter(Boolean).length === 1
+        ? proxy.hostinfo.ip
+        : proxy.hostname;
 
   const openProxy = (url: string, credentials?: Credentials) => {
     const auth =
@@ -264,7 +271,7 @@ export default function ProxyCard({
       <LoginRequiredDialog
         open={openLogin}
         setOpen={setOpenLogin}
-        proxyIp={proxy.hostinfo.ip}
+        proxyIp={proxyAddress}
         redirection={'/Diagnostics'}
         onCredentials={(credentials) => {
           if (pendingProxyUrl)
@@ -338,7 +345,7 @@ export default function ProxyCard({
               <DropdownMenuItem
                 onClick={() => {
                   openProxy(
-                    `https://${proxy.hostinfo.ip}:8082/Secure/Local/console/mc_vpm.html`,
+                    `https://${proxyAddress}:8082/Secure/Local/console/mc_vpm.html`,
                   );
                 }}
               >
@@ -346,7 +353,7 @@ export default function ProxyCard({
               </DropdownMenuItem>
               <DropdownMenuItem
                 onClick={() => {
-                  openProxy(`https://${proxy.hostinfo.ip}:8082/`);
+                  openProxy(`https://${proxyAddress}:8082/`);
                 }}
               >
                 Open admin console (Early)
@@ -363,7 +370,7 @@ export default function ProxyCard({
                   }}
                   href={{
                     pathname: '/Diagnostics',
-                    query: { proxy: proxy.hostinfo.ip },
+                    query: { proxy: proxyAddress },
                   }}
                 >
                   Diagnostic tools
