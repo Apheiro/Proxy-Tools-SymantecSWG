@@ -17,10 +17,7 @@ import AdvanceTransactionView from '@/components/advanceTransactionView';
 import FilterBar from '@/components/filterBar';
 import TransactionCard from '@/components/transactionCard';
 import evaluatePolicyMatchesFn from '@/lib/evaluatePolicyMatches';
-import {
-  deleteLocalStorage,
-  getLocalStorage,
-} from '@/lib/utilsClient';
+import getCredentials from '@/lib/getCredentials';
 
 interface Logs {
   raw: string[];
@@ -33,20 +30,6 @@ export default function Page() {
       <PageBase />
     </Suspense>
   );
-}
-
-function getCredentials(): Credentials | null {
-  const cred = getLocalStorage<Credentials>('credentials');
-  const oneTimeCred = getLocalStorage<Credentials>(
-    'one-time-credentials',
-  );
-  if (cred) {
-    return cred;
-  } else if (oneTimeCred) {
-    return oneTimeCred;
-  } else {
-    return null;
-  }
 }
 
 function PageBase() {
@@ -79,8 +62,9 @@ function PageBase() {
   useEffect(() => {
     let unlisten: UnlistenFn | null = null;
     const credentials = getCredentials();
-    const ipProxy = searchParams.get('proxy') || null;
-    if (!ipProxy) {
+    const ipTraceProxy = searchParams.get('traceUrl') || null;
+    console.log('ipTraceProxy', ipTraceProxy);
+    if (!ipTraceProxy) {
       toast.error('Proxy not found.');
       return;
     }
@@ -88,8 +72,11 @@ function PageBase() {
       toast.error('Credentials not found.');
       return;
     }
+    console.log('if passed, starting logs collector');
     (async () => {
+      console.log('creating listener for logs:update');
       unlisten = await listen<Logs>('logs:update', (e) => {
+        console.log('logs:update event received', e);
         const json = e.payload.json
           .map<TransactionInfo>((j) => {
             const jso = JSON.parse(j) as TransactionInfo;
@@ -110,21 +97,19 @@ function PageBase() {
         setJsonLogs((j) => [...json, ...j]);
         setRawLogs((r) => [...raw, ...r]);
       });
-
+      console.log('logs start with start_logs');
       const start = invoke('start_logs', {
-        ippr: ipProxy,
+        ippr: ipTraceProxy,
         userpr: credentials?.username,
         passpr: credentials?.password,
       });
 
       toast.promise(start, {
         loading: 'Starting logs...',
-        success: () => {
-          deleteLocalStorage('one-time-credentials');
+        success: (e) => {
           return 'Logs started successfully.';
         },
         error: (e) => {
-          deleteLocalStorage('one-time-credentials');
           return `Error starting logs: ${e}`;
         },
       });

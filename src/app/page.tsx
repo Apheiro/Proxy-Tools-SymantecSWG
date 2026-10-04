@@ -10,6 +10,7 @@ import { valibotResolver } from 'mantine-form-valibot-resolver';
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import * as v from 'valibot';
+import DotField from '@/components/dots';
 import ProxyCard from '@/components/proxyCard';
 import { Button } from '@/components/ui/button';
 import {
@@ -25,7 +26,12 @@ import {
 } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
 import useTheme from '@/hook/useTheme';
-import { getLocalStorage, postLocalStorage } from '@/lib/utilsClient';
+import getCredentials from '@/lib/getCredentials';
+import {
+  deleteLocalStorage,
+  getLocalStorage,
+  postLocalStorage,
+} from '@/lib/utilsClient';
 
 const logoStyle = cva(['w-[300px]', 'mt-[100px]', 'invert'], {
   variants: {
@@ -48,8 +54,12 @@ export default function Page() {
   const [disable, setDisable] = useState(false);
   const [disableReCheck, setDisableReCheck] = useState(false);
   const { theme } = useTheme();
+
   useEffect(() => {
     setProxies(getLocalStorage('proxies') || []);
+    if (getCredentials('one-time-credentials')) {
+      deleteLocalStorage('one-time-credentials');
+    }
   }, []);
 
   const reCheckProxies = () => {
@@ -117,27 +127,35 @@ export default function Page() {
     },
   });
   return (
-    <main className='flex justify-center items-center flex-col min-h-dvh w-dvw gap-4 p-5'>
-      <img
-        src='/Proxy logo.svg'
-        className={logoStyle({
-          theme: theme as 'light' | 'dark',
-        })}
-        alt='logo'
-      />
-      <Card>
-        <CardHeader>
-          <CardTitle>New proxy</CardTitle>
-        </CardHeader>
-        <CardContent>
+    <main className='flex flex-col min-h-dvh w-dvw items-center gap-10 p-5'>
+      <Card className='w-full overflow-hidden max-w-250 min-w-100 h-55'>
+        <CardContent className='relative flex flex-col items-end  h-full '>
+          <div className='self-start bold  backdrop-blur-[1px] rounded-md bg-[var(--card)]/50 relative z-10 p-4'>
+            <h5 className='font-bold text-2xl'>Proxy Log Tool</h5>
+            <p className='max-w-100 overflow-ellipsis'>
+              Add a new proxy and check if is reachable from your
+              network device to start using the logging UI tool
+            </p>
+          </div>
+          <div className='absolute flex justify-center items-start flex-col left-[-5] top-[-30] w-full [mask-image:radial-gradient(circle_1000px_at_15%_-80%,black_30%,transparent_70%)]'>
+            <DotField
+              width={1000}
+              height={500}
+              density={14}
+              darkAreas={7}
+              maxDotSize={4}
+              minDotSize={2}
+              contrast={4}
+              seed={132}
+            />
+          </div>
           <form
             onSubmit={form.onSubmit((values) => {
               addProxy(values.hostname);
             })}
-            className='w-full space-y-6 flex flex-col '
+            className='max-w-70 gap-5 flex items-center mt-auto relative z-10 backdrop-blur-[1px] rounded-md bg-[var(--card)]/50 p-2'
           >
             <FormItem>
-              <FormLabel>Proxy IP/Hostname</FormLabel>
               <Input
                 {...form.getInputProps('hostname')}
                 placeholder='e.g.: proxy02'
@@ -146,12 +164,7 @@ export default function Page() {
                 <FormMessage>{form.errors.ip}</FormMessage>
               )}
             </FormItem>
-            <Button
-              size='sm'
-              type='submit'
-              className='self-end'
-              disabled={disable}
-            >
+            <Button size='sm' type='submit' disabled={disable}>
               Add
             </Button>
           </form>

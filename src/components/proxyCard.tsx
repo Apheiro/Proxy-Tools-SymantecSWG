@@ -49,18 +49,20 @@ const credentialSchema = v.object({
   ),
 });
 
-function LoginDialog({
+function LoginRequiredDialog({
   open,
   setOpen,
-  proxy,
+  redirection,
+  proxyIp,
 }: {
   open: boolean;
   setOpen: (open: boolean) => void;
-  proxy: Proxy;
+  redirection: string;
+  proxyIp: string;
 }) {
   const router = useRouter();
-  const url = useUrlResolver('/trace', {
-    query: { proxy: proxy.hostinfo.ip },
+  const url = useUrlResolver(redirection, {
+    query: { proxy: proxyIp },
   });
   const usrId = useId();
   const pswId = useId();
@@ -234,10 +236,11 @@ export default function ProxyCard({
         deleteProxy={deleteProxy}
         proxy={proxy}
       />
-      <LoginDialog
+      <LoginRequiredDialog
         open={openLogin}
         setOpen={setOpenLogin}
-        proxy={proxy}
+        proxyIp={proxy.hostinfo.ip}
+        redirection={'/Diagnostics'}
       />
       <CardHeader className='flex flex-col'>
         {proxy.hostinfo.ip.split(' ').length > 1 && (
@@ -332,11 +335,11 @@ export default function ProxyCard({
                     }
                   }}
                   href={{
-                    pathname: '/trace',
+                    pathname: '/Diagnostics',
                     query: { proxy: proxy.hostinfo.ip },
                   }}
                 >
-                  Connect to trace
+                  Diagnostic tools
                 </Link>
               </DropdownMenuItem>
             </DropdownMenuContent>

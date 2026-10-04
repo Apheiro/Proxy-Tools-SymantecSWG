@@ -224,6 +224,7 @@ async fn start_logs(
     userpr: &str, 
     passpr: &str
 ) -> Result<(), String> {
+    println!("start logs is running");
     {
         let mut guard = state.cancel.lock().unwrap();
         if guard.is_some() { return Err("ya está corriendo".into()); }
@@ -231,14 +232,15 @@ async fn start_logs(
     }
     let token = state.cancel.lock().unwrap().as_ref().unwrap().clone();
 
-    let ip = ippr.to_string();
-    // let url = format!("https://{}:8082/Policy/Trace/proxytools", ip);
-    let url = "http://127.0.0.1:5500/".to_string();
+    // let ip = ippr.to_string(); <--- ORIGINAL
+    // let url = format!("https://{}:8082/Policy/Trace/proxytools", ip);  <--- ORIGINAL
+    // let url = ippr.to_string(); <--- ORIGINAL FIXED DINAMIC TRACE
+    let url = "http://127.0.0.1:5500/Policy/Trace/etuyon.html".to_string();
     let user = userpr.to_string();
     let pass = passpr.to_string();
     let interval_secs = 5;
+    
 
-   
     tauri::async_runtime::spawn(async move {
         let jar = Arc::new(CookieStoreMutex::new(CookieStore::default()));
         let client = reqwest::Client::builder()
@@ -264,12 +266,13 @@ async fn start_logs(
         let mut blocks_json_in_mem: Vec<String> = Vec::new();
         let mut ids: HashSet<u64> = HashSet::with_capacity(50_000);
 
+        println!("starting log worker for url: {}", url);
         while !token.is_cancelled() {
             let mut req = client.get(&url);
             if !user.is_empty() && !pass.is_empty() { 
                 req = req.basic_auth(&user, Some(&pass)); 
             }
-
+            println!("requesting: {}", url);
             if let Ok(resp) = req.send().await {
                 let status = resp.status();
                 let html_coded = resp.text().await.unwrap_or_default();
@@ -281,7 +284,7 @@ async fn start_logs(
                             .find_iter(&html) 
                             .map(|m| m.as_str().trim_end().to_string())
                             .collect();
-
+                    println!("🔍 Bloques encontrados: {}", new_blocks.len());
                     let mut appended_blocks: Vec<String> = Vec::new();
                     for blk in new_blocks {
                         let id: u64 = cap_str(get_regex("re_tx_id"), &blk).unwrap_or("0".to_string()).trim().parse::<u64>().unwrap_or(0);
@@ -320,12 +323,165 @@ async fn stop_logs(state: State<'_, LogWorkerState>) -> Result<(), String> {
 }
 
 
+
+// use regex::Regex;
+// use serde::Serialize;
+
+#[derive(Serialize)]
+struct HtmlData {
+    filesLink: Vec<FileLink>,
+    traces: Vec<TraceItem>,
+}
+
+#[derive(Serialize)]
+struct FileLink {
+    name: String,
+    content: String,
+}
+
+#[derive(Serialize)]
+struct TraceItem {
+    trace: String,
+    url: String,
+}
+
+#[tauri::command]
+async fn get_html_data(
+    ippr: &str,
+    userpr: &str,
+    passpr: &str,
+) -> Result<HtmlData, String> {
+
+    // let url = format!("https://{}:8082/Policy", ippr); <--- ORIGINAL
+    let url = format!("http://127.0.0.1:5500/Policy.html");
+
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .user_agent("trace-tools/0.1")
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let html = client
+        .get(&url)
+        .basic_auth(userpr, Some(passpr))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .text()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let html = html_escape::decode_html_entities(&html).into_owned();
+
+    let re_link = Regex::new(r#"<a\s+href="([^"]+)">([^<]+)</a>"#).unwrap();
+    let re_pre = Regex::new(r#"(?is)<pre[^>]*>(.*?)</pre>"#).unwrap();
+
+    let mut files = Vec::new();
+    let mut traces = Vec::new();
+
+    for cap in re_link.captures_iter(&html) {
+        
+        let href = cap.get(1).unwrap().as_str();
+        let name = cap.get(2).unwrap().as_str().trim();
+
+        // -------- ignorar ----------
+        if href.contains("Statistics")
+            || href.contains("Coverage")
+            || href.contains("classification")
+            || href.contains("Reset-Stats")
+        {
+            continue;
+        }
+
+        // -------- traces ----------
+        if href.starts_with("/Policy/Trace/") {
+
+            traces.push(TraceItem {
+                trace: name.to_string(),
+                url: format!("https://{}:8082{}", ippr, href),
+            });
+
+            continue;
+        }
+
+        // -------- files ----------
+        // let file_url = format!("https://{}:8082{}", ippr, href); <--- ORIGINAL
+        let file_url = format!("http://127.0.0.1:5500{}", href);
+        let content = match client
+            .get(&file_url)
+            .basic_auth(userpr, Some(passpr))
+            .send()
+            .await
+        {
+            Ok(response) => match response.text().await {
+                Ok(text) => {
+                    let text = html_escape::decode_html_entities(&text).into_owned();
+                
+                    if let Some(cap) = re_pre.captures(&text) {
+                        cap.get(1)
+                            .map(|m| m.as_str().trim().to_string())
+                            .unwrap_or_default()
+                    } else {
+                        text
+                    }
+                }
+                Err(_) => String::new(),
+            },
+            Err(_) => String::new(),
+        };
+        
+        files.push(FileLink {
+            name: name.to_string(),
+            content,
+        });
+
+
+
+
+        // let file_url = format!("https://{}:8082{}", ippr, href);
+
+        // let response = match client
+        //     .get(&file_url)
+        //     .basic_auth(userpr, Some(passpr))
+        //     .send()
+        //     .await
+        // {
+        //     Ok(r) => r,
+        //     Err(_) => continue,
+        // };
+
+        // let text = match response.text().await {
+        //     Ok(t) => t,
+        //     Err(_) => continue,
+        // };
+
+        // let text = html_escape::decode_html_entities(&text).into_owned();
+
+        // let content = if let Some(cap) = re_pre.captures(&text) {
+        //     cap.get(1).unwrap().as_str().trim().to_string()
+        // } else {
+        //     text
+        // };
+
+        // files.push(FileLink {
+        //     name: name.to_string(),
+        //     content,
+        // });
+    }
+
+    Ok(HtmlData {
+        filesLink: files,
+        traces,
+    })
+}
+
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
     .manage(LogWorkerState::default())
     .plugin(tauri_plugin_opener::init())
-    .invoke_handler(tauri::generate_handler![getproxystatus, start_logs, stop_logs, open_proxy])
+    .invoke_handler(tauri::generate_handler![getproxystatus, start_logs, stop_logs, open_proxy, get_html_data])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
 }
