@@ -249,9 +249,26 @@ function PolicyMatch({ match }: { match: string }) {
 }
 
 function EvaluationMatchesPolicy({ log }: { log: TransactionInfo }) {
+  const [showMisses, setShowMisses] = useState(true);
+
+  useEffect(() => {
+    console.log('logs processed', log);
+  }, []);
+
   return (
     <div className='flex flex-col gap-3'>
-      <p className='font-bold'>Matches</p>
+      <div className='flex items-center justify-between'>
+        <p className='font-bold'>Matches</p>
+        <Button
+          type='button'
+          size='sm'
+          variant='outline'
+          aria-pressed={!showMisses}
+          onClick={() => setShowMisses((visible) => !visible)}
+        >
+          {showMisses ? 'Hide misses' : 'Show misses'}
+        </Button>
+      </div>
       <Card className='relative w-full h-100'>
         <div className='absolute left-3 right-1  bottom-3 top-3'>
           <ScrollArea className='h-full w-full pr-3 absolute'>
@@ -261,9 +278,18 @@ function EvaluationMatchesPolicy({ log }: { log: TransactionInfo }) {
                   <p>{m.header}</p>
                 </div>
                 <div className='rounded-sm py-2 pl-8'>
-                  {m.matches.map((match) => (
-                    <PolicyMatch match={match} key={match} />
-                  ))}
+                  {m.matches
+                    .filter(
+                      (match) =>
+                        showMisses ||
+                        !/^miss:/i.test(match.trimStart()),
+                    )
+                    .map((match, i) => (
+                      <PolicyMatch
+                        match={match}
+                        key={`${i}-${match}`}
+                      />
+                    ))}
                 </div>
               </div>
             ))}
