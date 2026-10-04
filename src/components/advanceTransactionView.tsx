@@ -13,6 +13,7 @@ import {
   type LucideProps,
   User,
   Waypoints,
+  X,
 } from 'lucide-react';
 import {
   type Dispatch,
@@ -26,16 +27,23 @@ import {
 } from 'react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card';
 import {
   Dialog,
+  DialogClose,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from './ui/badge';
-import { Separator } from './ui/separator';
 import {
   Timeline,
   TimelineContent,
@@ -325,91 +333,193 @@ export default function AdvanceTransactionView({
         }
       }}
     >
-      <DialogContent className='max-w-[1000px]! max-h-[800px] h-full position-relative px-1'>
-        <DialogHeader className='px-4'>
-          <DialogTitle>Transaction advance details</DialogTitle>
+      <DialogContent className='flex h-[calc(100dvh-2rem)] max-h-[900px] w-[calc(100vw-2rem)] max-w-6xl! flex-col gap-0 overflow-hidden p-0'>
+        <DialogHeader className='shrink-0 border-b px-5 py-4 pr-14 text-left sm:px-7'>
+          <div className='flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
+            <div className='min-w-0'>
+              <DialogTitle className='text-lg'>
+                Transaction details
+              </DialogTitle>
+              <DialogDescription className='mt-1 truncate'>
+                {log?.application.name || 'Transaction'}
+                {log?.transaction.id
+                  ? ` · ID ${log.transaction.id}`
+                  : ''}
+              </DialogDescription>
+            </div>
+            <div className='flex flex-wrap items-center gap-2'>
+              {log?.transaction.type && (
+                <Badge variant='secondary'>
+                  {log.transaction.type}
+                </Badge>
+              )}
+              {log?.decision.verdict && (
+                <Badge variant='outline'>
+                  {log.decision.verdict.toUpperCase()}
+                </Badge>
+              )}
+            </div>
+          </div>
+          <DialogClose asChild>
+            <Button
+              type='button'
+              variant='ghost'
+              size='icon'
+              aria-label='Close transaction details'
+              className='absolute right-4 top-3'
+            >
+              <X className='size-4' />
+            </Button>
+          </DialogClose>
         </DialogHeader>
-        <ScrollArea className='max-h-[730px] w-full px-4 absolute'>
-          <section ref={animateRef} className='flex flex-col gap-10 '>
-            <Connection
-              trs={log?.transaction.id}
-              checkpoints={log?.timing.checkpoints}
-            />
-            <Separator />
-            <div className='flex flex-col gap-3'>
-              <p>Assigned variables</p>
-              <div className='flex flex-wrap flex-row gap-2'>
-                {Object.entries(log?.assignedVariables || {}).map(
-                  ([key, value]) => (
-                    <Badge key={key} className='w-fit'>
-                      {key}:{' '}
-                      <span className='font-bold'>{value}</span>
-                    </Badge>
-                  ),
-                )}
-              </div>
-            </div>
-            <Separator />
-            <div className='flex justify-between'>
-              <Button
-                variant='outline'
-                className='w-fit'
-                onClick={toggleLog}
-              >
-                Show transaction log <ChevronDown />
-              </Button>
-              <Button
-                variant='outline'
-                className='w-fit'
-                onClick={() => {
-                  toast.success('Copied to clipboard');
-                  navigator.clipboard.writeText(raw);
-                }}
-              >
-                <Copy /> Copy
-              </Button>
-            </div>
-            {showLog && (
-              <Card className='relative w-full h-100'>
-                <div className='absolute left-3 bottom-3 right-3 top-3'>
-                  <ScrollArea className='h-full w-full absolute'>
-                    <pre className='text-xs'>{raw}</pre>
-                    <ScrollBar orientation='horizontal' />
-                  </ScrollArea>
+
+        <ScrollArea className='min-h-0 w-full flex-1'>
+          <section
+            ref={animateRef}
+            className='mx-auto flex w-full max-w-5xl flex-col gap-5 p-4 sm:gap-6 sm:p-6'
+          >
+            <Card className='gap-0'>
+              <CardHeader className='px-4 py-4 sm:px-5'>
+                <CardTitle className='text-base'>
+                  Connection timeline
+                </CardTitle>
+                <CardDescription>
+                  Transaction checkpoints and elapsed time.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className='overflow-x-auto px-2 pb-4 sm:px-4'>
+                <div className='min-w-[700px]'>
+                  <Connection
+                    trs={log?.transaction.id}
+                    checkpoints={log?.timing.checkpoints}
+                  />
                 </div>
-              </Card>
-            )}
+              </CardContent>
+            </Card>
+
+            <Card className='gap-0'>
+              <CardHeader className='px-4 py-4 sm:px-5'>
+                <CardTitle className='text-base'>
+                  Assigned variables
+                </CardTitle>
+                <CardDescription>
+                  Values assigned during policy processing.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className='grid gap-2 px-4 pb-4 sm:grid-cols-2 sm:px-5 lg:grid-cols-3'>
+                {Object.entries(log?.assignedVariables || {}).length >
+                0 ? (
+                  Object.entries(log?.assignedVariables || {}).map(
+                    ([key, value]) => (
+                      <div
+                        key={key}
+                        className='min-w-0 rounded-md border bg-muted/20 px-3 py-2'
+                      >
+                        <p className='truncate text-xs text-muted-foreground'>
+                          {key}
+                        </p>
+                        <p className='mt-1 break-all text-sm font-medium'>
+                          {value}
+                        </p>
+                      </div>
+                    ),
+                  )
+                ) : (
+                  <p className='text-sm text-muted-foreground'>
+                    No assigned variables were recorded.
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card className='gap-0'>
+              <CardHeader className='flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5'>
+                <div>
+                  <CardTitle className='text-base'>
+                    Transaction log
+                  </CardTitle>
+                  <CardDescription>
+                    Raw trace block associated with this transaction.
+                  </CardDescription>
+                </div>
+                <div className='flex shrink-0 justify-end gap-2'>
+                  <Button
+                    variant='outline'
+                    size='sm'
+                    onClick={toggleLog}
+                    aria-expanded={showLog}
+                  >
+                    {showLog ? 'Hide log' : 'Show log'}
+                    <ChevronDown
+                      className={`transition-transform ${showLog ? 'rotate-180' : ''}`}
+                    />
+                  </Button>
+                  <Button
+                    variant='outline'
+                    size='sm'
+                    onClick={() => {
+                      toast.success('Copied to clipboard');
+                      navigator.clipboard.writeText(raw);
+                    }}
+                  >
+                    <Copy /> Copy
+                  </Button>
+                </div>
+              </CardHeader>
+              {showLog && (
+                <CardContent className='px-4 pb-4 sm:px-5'>
+                  <ScrollArea
+                    orientation='both'
+                    className='h-72 rounded-md border bg-muted/20 p-3'
+                  >
+                    <pre className='w-max min-w-full font-mono text-xs leading-5'>
+                      {raw}
+                    </pre>
+                  </ScrollArea>
+                </CardContent>
+              )}
+            </Card>
+
             {log?.policyMatches.length > 0 && (
-              <>
-                <Separator />
-                <EvaluationMatchesPolicy log={log} />
-              </>
+              <EvaluationMatchesPolicy log={log} />
             )}
+
             {log?.matchedConditions.length > 0 && (
-              <div className='flex flex-col gap-3'>
-                <p>Conditions matched</p>
-                <Card className='relative w-full h-100'>
-                  <div className='absolute left-3 right-1  bottom-3 top-3'>
-                    <ScrollArea className='h-full w-full pr-3 absolute'>
-                      {log?.matchedConditions.map(
-                        ({ condition, matches }, i) => (
-                          // biome-ignore lint/suspicious/noArrayIndexKey: <>
-                          <div key={`${condition}-${i}`}>
-                            <div className='bg-secondary border-accent rounded-sm p-2'>
-                              <p>{condition}</p>
-                            </div>
-                            <div className=' rounded-sm p-2 pl-8'>
-                              {matches.map((match) => (
-                                <p key={match}>{match}</p>
-                              ))}
-                            </div>
-                          </div>
-                        ),
-                      )}
-                    </ScrollArea>
-                  </div>
-                </Card>
-              </div>
+              <Card className='gap-0'>
+                <CardHeader className='px-4 py-4 sm:px-5'>
+                  <CardTitle className='text-base'>
+                    Conditions matched
+                  </CardTitle>
+                  <CardDescription>
+                    Conditions and values reported for this
+                    transaction.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className='flex flex-col gap-3 px-4 pb-4 sm:px-5'>
+                  {log.matchedConditions.map(
+                    ({ condition, matches }, i) => (
+                      <div
+                        key={`${condition}-${i}`}
+                        className='overflow-hidden rounded-md border'
+                      >
+                        <div className='bg-secondary px-3 py-2 text-sm font-medium'>
+                          {condition}
+                        </div>
+                        <div className='flex flex-col gap-1 px-3 py-2'>
+                          {matches.map((match, mI) => (
+                            <p
+                              key={`${match}-${mI}`}
+                              className='break-words text-sm text-muted-foreground'
+                            >
+                              {match}
+                            </p>
+                          ))}
+                        </div>
+                      </div>
+                    ),
+                  )}
+                </CardContent>
+              </Card>
             )}
           </section>
         </ScrollArea>
