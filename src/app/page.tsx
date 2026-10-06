@@ -337,15 +337,15 @@ export default function Page() {
         <header className='flex flex-col gap-2 border-b pb-5'>
           <div className='flex items-center gap-2 text-sm text-muted-foreground'>
             <FileCode2 className='size-4' />
-            Workspace de archivos PAC/WPAD
+            PAC/WPAD file workspace
           </div>
           <h1 className='text-2xl font-bold tracking-tight md:text-3xl'>
             PAC File Manager Workspace
           </h1>
           <p className='max-w-2xl text-sm text-muted-foreground'>
-            Cargá fuentes WPAD/PAC, revisá sus reglas en orden y
-            prepará una versión exportable. Los destinos de proxy usan
-            el inventario ya registrado.
+            Manage PAC sources here. Open an existing source or create
+            one from scratch to edit routing rules in its dedicated
+            workspace. Proxy destinations use the registered inventory.
           </p>
         </header>
         <PacFileManagerWorkspace proxies={proxies} />

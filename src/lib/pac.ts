@@ -5,7 +5,17 @@ export type PacStatus =
   | 'conflict'
   | 'offline';
 export type PacCondition = {
-  kind: 'domain' | 'url' | 'host' | 'regex' | 'always';
+  kind:
+    | 'domain'
+    | 'url'
+    | 'host'
+    | 'starts-with'
+    | 'ends-with'
+    | 'contains'
+    | 'ip-network'
+    | 'expression'
+    | 'regex'
+    | 'always';
   value: string;
   target?: 'url' | 'host';
 };
@@ -16,15 +26,21 @@ export type PacDestination =
       proxyRef: string;
       host: string;
       port: string;
-      protocol: 'PROXY' | 'HTTPS' | 'SOCKS' | 'SOCKS5';
+      protocol: 'PROXY' | 'HTTP' | 'HTTPS' | 'SOCKS' | 'SOCKS4' | 'SOCKS5';
     };
 export type PacRule = {
   id: string;
+  groupId?: string;
   condition: PacCondition;
   destination: PacDestination;
+  fallbacks?: PacDestination[];
   editable: boolean;
   raw?: string;
   warning?: string;
+};
+export type PacGroup = {
+  id: string;
+  name: string;
 };
 export type PacSource = {
   id: string;
@@ -36,6 +52,9 @@ export type PacSource = {
   baseHash?: string;
   rules: PacRule[];
   baseRules: PacRule[];
+  groups?: PacGroup[];
+  baseGroups?: PacGroup[];
+  entryPoint?: 'legacy' | 'ipv6';
   prefix?: string;
   suffix?: string;
   remoteContent?: string;
@@ -61,6 +80,136 @@ export function proxyIdentity(proxy: Proxy): string {
     proxy.registered_address ||
     proxy.hostname
   );
+}
+
+export type ParsedIpNetwork = {
+  family: 4 | 6;
+  address: string;
+  prefix: number;
+};
+
+function parseIpv4(address: string): number[] | undefined {
+  const parts = address.split('.');
+  if (
+    parts.length !== 4 ||
+    parts.some(
+      (part) =>
+        !/^\d{1,3}$/.test(part) || Number(part) < 0 || Number(part) > 255,
+    )
+  )
+    return undefined;
+  return parts.map(Number);
+}
+
+function ipv4ToString(parts: number[]): string {
+  return parts.join('.');
+}
+
+function ipv4Mask(prefix: number): string {
+  return ipv4ToString(
+    Array.from({ length: 4 }, (_, index) => {
+      const bits = Math.max(0, Math.min(8, prefix - index * 8));
+      return bits === 0 ? 0 : 256 - 2 ** (8 - bits);
+    }),
+  );
+}
+
+export function parseIpNetwork(value: string): ParsedIpNetwork | undefined {
+  const [rawAddress, rawPrefix, ...extra] = value.trim().split('/');
+  if (!rawAddress || extra.length) return undefined;
+  const ipv4 = parseIpv4(rawAddress);
+  if (ipv4) {
+    const prefix = rawPrefix === undefined ? 32 : Number(rawPrefix);
+    if (!Number.isInteger(prefix) || prefix < 0 || prefix > 32)
+      return undefined;
+    const mask = parseIpv4(ipv4Mask(prefix))!;
+    return {
+      family: 4,
+      address: ipv4ToString(ipv4.map((part, index) => part & mask[index])),
+      prefix,
+    };
+  }
+  const address = rawAddress.replace(/^\[|\]$/g, '');
+  if (!address.includes(':')) return undefined;
+  const prefix = rawPrefix === undefined ? 128 : Number(rawPrefix);
+  if (!Number.isInteger(prefix) || prefix < 0 || prefix > 128)
+    return undefined;
+  try {
+    new URL(`http://[${address}]/`);
+  } catch {
+    return undefined;
+  }
+  return { family: 6, address, prefix };
+}
+
+function prefixFromMask(mask: string): number | undefined {
+  const parts = parseIpv4(mask);
+  if (!parts) return undefined;
+  const bits = parts.map((part) => part.toString(2).padStart(8, '0')).join('');
+  if (!/^1*0*$/.test(bits)) return undefined;
+  return bits.indexOf('0') < 0 ? 32 : bits.indexOf('0');
+}
+
+function parseIpv6(address: string): number[] | undefined {
+  const value = address.replace(/^\[|\]$/g, '').toLowerCase();
+  if (!value.includes(':') || (value.match(/::/g) ?? []).length > 1)
+    return undefined;
+  let expanded = value;
+  const dotted = expanded.match(/(?:^|:)(\d+\.\d+\.\d+\.\d+)$/);
+  if (dotted) {
+    const v4 = parseIpv4(dotted[1]);
+    if (!v4) return undefined;
+    const tail = [
+      ((v4[0] << 8) | v4[1]).toString(16),
+      ((v4[2] << 8) | v4[3]).toString(16),
+    ];
+    expanded = expanded.slice(0, -dotted[1].length) + tail.join(':');
+  }
+  const halves = expanded.split('::');
+  const left = halves[0] ? halves[0].split(':') : [];
+  const right = halves[1] ? halves[1].split(':') : [];
+  const missing = 8 - left.length - right.length;
+  if (
+    missing < 0 ||
+    (halves.length === 1 && missing !== 0) ||
+    (halves.length === 2 && missing < 1)
+  )
+    return undefined;
+  const words = [...left, ...Array(missing).fill('0'), ...right];
+  if (
+    words.length !== 8 ||
+    words.some((word) => !/^[0-9a-f]{1,4}$/.test(word))
+  )
+    return undefined;
+  return words.flatMap((word) => {
+    const number = Number.parseInt(word, 16);
+    return [number >> 8, number & 255];
+  });
+}
+
+export function ipMatchesNetwork(
+  address: string,
+  network: ParsedIpNetwork,
+): boolean {
+  if (network.family === 4) {
+    const candidate = parseIpv4(address);
+    const base = parseIpv4(network.address);
+    if (!candidate || !base) return false;
+    const mask = parseIpv4(ipv4Mask(network.prefix))!;
+    return candidate.every(
+      (part, index) => (part & mask[index]) === base[index],
+    );
+  }
+  const candidate = parseIpv6(address),
+    base = parseIpv6(network.address);
+  if (!candidate || !base) return false;
+  for (let index = 0; index < network.prefix; index += 1) {
+    const byte = Math.floor(index / 8),
+      bit = 7 - (index % 8),
+      mask = 1 << bit;
+    if ((candidate[byte] & mask) !== (base[byte] & mask)) return false;
+  }
+  return true;
 }
 
 function findBrace(source: string, open: number): number {
@@ -168,6 +317,33 @@ function parseCondition(
   );
   if (m) return { kind: 'url', value: unquote(m[1]) ?? '' };
   m = expression.match(
+    /^\s*(url|host)\.indexOf\(\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')\s*\)\s*===?\s*0\s*$/,
+  );
+  if (m)
+    return {
+      kind: 'starts-with',
+      target: m[1] as 'url' | 'host',
+      value: unquote(m[2]) ?? '',
+    };
+  m = expression.match(
+    /^\s*(url|host)\.indexOf\(\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')\s*\)\s*!==?\s*-1\s*$/,
+  );
+  if (m)
+    return {
+      kind: 'contains',
+      target: m[1] as 'url' | 'host',
+      value: unquote(m[2]) ?? '',
+    };
+  m = expression.match(
+    /^\s*(url|host)\.lastIndexOf\(\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')\s*\)\s*===?\s*\1\.length\s*-\s*\2\.length\s*$/,
+  );
+  if (m)
+    return {
+      kind: 'ends-with',
+      target: m[1] as 'url' | 'host',
+      value: unquote(m[2]) ?? '',
+    };
+  m = expression.match(
     /^\s*(?:host|url)\s*\.match\(\s*\/(.*)\/([gimsuy]*)\s*\)\s*$/,
   );
   if (m)
@@ -188,6 +364,32 @@ function parseCondition(
       target: m[2] as 'url' | 'host',
     };
   m = expression.match(
+    /^\s*isInNet\(\s*host\s*,\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')\s*,\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')\s*\)\s*$/i,
+  );
+  if (m) {
+    const prefix = prefixFromMask(unquote(m[2]) ?? '');
+    const network =
+      prefix === undefined
+        ? undefined
+        : parseIpNetwork(`${unquote(m[1])}/${prefix}`);
+    if (network?.family === 4)
+      return {
+        kind: 'ip-network',
+        value: `${network.address}/${network.prefix}`,
+      };
+  }
+  m = expression.match(
+    /^\s*isInNetEx\(\s*host\s*,\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')\s*\)\s*$/i,
+  );
+  if (m) {
+    const network = parseIpNetwork(unquote(m[1]) ?? '');
+    if (network?.family === 6)
+      return {
+        kind: 'ip-network',
+        value: `${network.address}/${network.prefix}`,
+      };
+  }
+  m = expression.match(
     /^\s*dnsDomainIs\(\s*host\s*,\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')\s*\)\s*$/,
   );
   if (m)
@@ -195,10 +397,26 @@ function parseCondition(
       kind: 'domain',
       value: (unquote(m[1]) ?? '').replace(/^\./, ''),
     };
+  const rawExpression = expression.trim();
+  if (rawExpression && !/[;{}]/.test(rawExpression))
+    return { kind: 'expression', value: rawExpression };
   return undefined;
 }
 
 function parseReturn(
+  value: string,
+  proxies: Proxy[],
+): PacDestination[] | undefined {
+  const destinations: PacDestination[] = [];
+  for (const entry of value.split(';').map((part) => part.trim()).filter(Boolean)) {
+    const parsed = parseDestination(entry, proxies);
+    if (!parsed) return undefined;
+    destinations.push(parsed);
+  }
+  return destinations.length ? destinations : undefined;
+}
+
+function parseDestination(
   value: string,
   proxies: Proxy[],
 ): PacDestination | undefined {
@@ -207,7 +425,7 @@ function parseReturn(
     return { kind: 'direct' };
   if (
     parts.length !== 2 ||
-    !['PROXY', 'HTTPS', 'SOCKS', 'SOCKS5'].includes(
+    !['PROXY', 'HTTP', 'HTTPS', 'SOCKS', 'SOCKS4', 'SOCKS5'].includes(
       parts[0].toUpperCase(),
     )
   )
@@ -217,6 +435,7 @@ function parseReturn(
     return undefined;
   const host = parts[1].slice(0, colon),
     port = parts[1].slice(colon + 1);
+  if (Number(port) < 1 || Number(port) > 65535) return undefined;
   const normalizedHost = host.replace(/^\[|\]$/g, '').toLowerCase();
   const proxy = proxies.find((item) =>
     [
@@ -237,8 +456,10 @@ function parseReturn(
     port,
     protocol: parts[0].toUpperCase() as
       | 'PROXY'
+      | 'HTTP'
       | 'HTTPS'
       | 'SOCKS'
+      | 'SOCKS4'
       | 'SOCKS5',
   };
 }
@@ -250,10 +471,11 @@ export function parsePac(
   rules: PacRule[];
   prefix: string;
   suffix: string;
+  entryPoint: 'legacy' | 'ipv6';
   error?: string;
 } {
   const fn =
-    /function\s+FindProxyForURL\s*\(\s*url\s*,\s*host\s*\)\s*\{/i.exec(
+    /function\s+(FindProxyForURLEx|FindProxyForURL)\s*\(\s*url\s*,\s*host\s*\)\s*\{/i.exec(
       content,
     );
   if (!fn)
@@ -261,7 +483,8 @@ export function parsePac(
       rules: [],
       prefix: '',
       suffix: '',
-      error: 'No se encontró una función FindProxyForURL(url, host).',
+      entryPoint: 'legacy',
+      error: 'Could not find a FindProxyForURL(url, host) function.',
     };
   const open = fn.index + fn[0].lastIndexOf('{'),
     close = findBrace(content, open);
@@ -270,7 +493,8 @@ export function parsePac(
       rules: [],
       prefix: '',
       suffix: '',
-      error: 'La función FindProxyForURL tiene llaves incompletas.',
+      entryPoint: fn[1].toLowerCase().endsWith('ex') ? 'ipv6' : 'legacy',
+      error: 'The FindProxyForURL function has unbalanced braces.',
     };
   const body = content.slice(open + 1, close),
     rules: PacRule[] = [];
@@ -290,7 +514,7 @@ export function parsePac(
       if (body.startsWith('/*', i)) {
         const end = body.indexOf('*/', i + 2);
         if (end < 0) {
-          error = 'Comentario sin cierre dentro de FindProxyForURL.';
+          error = 'An unterminated comment was found in FindProxyForURL.';
           i = body.length;
         } else i = end + 2;
         continue;
@@ -306,18 +530,18 @@ export function parsePac(
       const parenOpen = body.indexOf('(', i),
         parenClose = matchingParen(body, parenOpen);
       if (parenClose < 0) {
-        error = 'Condición PAC con paréntesis incompletos.';
+        error = 'A PAC condition has unbalanced parentheses.';
         break;
       }
       let brace = parenClose + 1;
       while (/\s/.test(body[brace] ?? '')) brace += 1;
       if (body[brace] !== '{') {
-        error = 'Solo se admiten reglas if con bloque entre llaves.';
+        error = 'Only if rules with a braced block are supported.';
         break;
       }
       const blockClose = findBrace(body, brace);
       if (blockClose < 0) {
-        error = 'Regla PAC con llaves incompletas.';
+        error = 'A PAC rule has unbalanced braces.';
         break;
       }
       const ret =
@@ -327,18 +551,20 @@ export function parsePac(
       const condition = parseCondition(
         body.slice(parenOpen + 1, parenClose),
       );
-      const destination = ret
+      const destinations = ret
         ? parseReturn(unquote(ret[1]) ?? '', proxies)
         : undefined;
-      if (!condition || !destination) {
+      if (!condition || !destinations) {
         error =
-          'Hay una regla con condición o destino fuera del formato visual compatible; se conserva el PAC original sin permitir una edición que pueda perder lógica.';
+          'A rule uses a condition or destination outside the visual editor format. The original PAC is preserved and editing is disabled to avoid losing logic.';
         break;
       }
       rules.push({
         id: crypto.randomUUID(),
+        groupId: 'general',
         condition,
-        destination,
+        destination: destinations[0],
+        fallbacks: destinations.slice(1),
         editable: true,
       });
       i = blockClose + 1;
@@ -349,35 +575,38 @@ export function parsePac(
         tail,
       );
     if (fallback) {
-      const destination = parseReturn(
+      const destinations = parseReturn(
         unquote(fallback[1]) ?? '',
         proxies,
       );
-      if (!destination) {
+      if (!destinations) {
         error =
-          'El destino final no es DIRECT ni un proxy registrado; se conserva el PAC original.';
+          'The final destination is neither DIRECT nor a registered proxy. The original PAC is preserved.';
         break;
       }
       rules.push({
         id: crypto.randomUUID(),
+        groupId: 'general',
         condition: { kind: 'always', value: '' },
-        destination,
+        destination: destinations[0],
+        fallbacks: destinations.slice(1),
         editable: true,
       });
       i += fallback[0].length;
       skip();
       if (i < body.length)
         error =
-          'Hay código después del return final; se conserva el PAC original.';
+          'Code appears after the final return. The original PAC is preserved.';
       break;
     }
     error =
-      'La función contiene código PAC que el editor visual no interpreta; se conserva el original y se desactiva la edición para evitar perder lógica.';
+      'The function contains PAC code the visual editor cannot interpret. The original is preserved and editing is disabled to avoid losing logic.';
   }
   return {
     rules,
     prefix: content.slice(0, open + 1),
     suffix: content.slice(close),
+    entryPoint: fn[1].toLowerCase().endsWith('ex') ? 'ipv6' : 'legacy',
     error,
   };
 }
@@ -389,15 +618,42 @@ export function generatePac(source: PacSource): string {
   const fallback = source.rules.find(
     (rule) => rule.condition.kind === 'always',
   );
-  const statements = rules.map(
+  const needsIpv6 = rules.some(
     (rule) =>
-      `  if (${conditionCode(rule.condition)}) {\n    return ${JSON.stringify(destinationCode(rule.destination))};\n  }`,
+      (rule.condition.kind === 'ip-network' &&
+        parseIpNetwork(rule.condition.value)?.family === 6) ||
+      (rule.condition.kind === 'expression' &&
+        /\b(?:isInNetEx|dnsResolveEx|myIpAddressEx|isResolvableEx|sortIpAddressList)\s*\(/i.test(rule.condition.value)),
   );
+  const entryPoint =
+    needsIpv6 || source.entryPoint === 'ipv6'
+      ? 'FindProxyForURLEx'
+      : 'FindProxyForURL';
+  const statements: string[] = [];
+  let lastGroup = '';
+  for (const rule of rules) {
+    const group = source.groups?.find(
+      (item) => item.id === rule.groupId,
+    );
+    if (group && group.id !== lastGroup) {
+      statements.push(`  // ${group.name.replace(/[\r\n]+/g, ' ')}`);
+      lastGroup = group.id;
+    }
+    statements.push(
+      `  if (${conditionCode(rule.condition)}) {\n    return ${JSON.stringify([rule.destination, ...(rule.fallbacks ?? [])].map(destinationCode).join('; '))};\n  }`,
+    );
+  }
   if (fallback)
     statements.push(
-      `  return ${JSON.stringify(destinationCode(fallback.destination))};`,
+      `  return ${JSON.stringify([fallback.destination, ...(fallback.fallbacks ?? [])].map(destinationCode).join('; '))};`,
     );
-  return `${source.prefix ?? 'function FindProxyForURL(url, host) {'}\n${statements.join('\n')}\n${source.suffix ?? '}'}\n`;
+  const prefix = source.prefix
+    ? source.prefix.replace(
+        /function\s+FindProxyForURLEx?\s*\(/i,
+        `function ${entryPoint}(`,
+      )
+    : `function ${entryPoint}(url, host) {`;
+  return `${prefix}\n${statements.join('\n')}\n${source.suffix ?? '}'}\n`;
 }
 
 function conditionCode(condition: PacCondition): string {
@@ -407,6 +663,22 @@ function conditionCode(condition: PacCondition): string {
     return `shExpMatch(url, ${JSON.stringify(condition.value)})`;
   if (condition.kind === 'host')
     return `host === ${JSON.stringify(condition.value)}`;
+  if (condition.kind === 'starts-with')
+    return `${condition.target ?? 'url'}.indexOf(${JSON.stringify(condition.value)}) === 0`;
+  if (condition.kind === 'ends-with') {
+    const target = condition.target ?? 'url';
+    return `${target}.lastIndexOf(${JSON.stringify(condition.value)}) === ${target}.length - ${JSON.stringify(condition.value)}.length`;
+  }
+  if (condition.kind === 'contains')
+    return `${condition.target ?? 'url'}.indexOf(${JSON.stringify(condition.value)}) !== -1`;
+  if (condition.kind === 'ip-network') {
+    const network = parseIpNetwork(condition.value);
+    if (!network) return 'false';
+    if (network.family === 6)
+      return `isInNetEx(host, ${JSON.stringify(`${network.address}/${network.prefix}`)})`;
+    return `isInNet(host, ${JSON.stringify(network.address)}, ${JSON.stringify(ipv4Mask(network.prefix))})`;
+  }
+  if (condition.kind === 'expression') return condition.value;
   if (condition.kind === 'regex')
     return `new RegExp(${JSON.stringify(condition.value)}).test(${condition.target ?? 'url'})`;
   return 'true';
@@ -455,6 +727,24 @@ export function urlMatches(
       .join('');
     return new RegExp(`^${escaped}$`).test(urlValue);
   }
+  if (
+    condition.kind === 'starts-with' ||
+    condition.kind === 'ends-with' ||
+    condition.kind === 'contains'
+  ) {
+    const target =
+      condition.target === 'host' ? hostValue : urlValue;
+    if (condition.kind === 'starts-with')
+      return target.startsWith(condition.value);
+    if (condition.kind === 'ends-with')
+      return target.endsWith(condition.value);
+    return target.includes(condition.value);
+  }
+  if (condition.kind === 'ip-network') {
+    const network = parseIpNetwork(condition.value);
+    return network ? ipMatchesNetwork(hostValue, network) : false;
+  }
+  if (condition.kind === 'expression') return false;
   if (condition.kind === 'regex') {
     try {
       return new RegExp(condition.value).test(

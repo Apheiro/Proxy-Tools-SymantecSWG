@@ -99,8 +99,30 @@ export default function DocumentationPage() {
             </CardTitle>
           </CardHeader>
           <CardContent className='text-sm text-muted-foreground'>
-            Downloads WPAD/PAC sources, edits supported rules, detects
-            conflicts, and exports a generated PAC file.
+            The Home workspace manages PAC sources. Select a source or
+            create one from scratch to open its dedicated editor, which
+            edits supported rules, detects conflicts, and exports a
+            generated PAC file. It can also
+            create a local PAC from scratch with a DIRECT fallback. Rules
+            can be organized into groups and filtered without changing
+            global evaluation order; groups move as ordered blocks while
+            rules retain their order within each group. Groups can be
+            collapsed to reduce the visible list. The editor keeps
+            rule creation, routing, URL testing, publishing guidance and a
+            modal PAC preview together, separate from source registration.
+            Conditions include domains, hosts,
+            URL patterns, string matching, regex, IPv4/IPv6 addresses and
+            CIDR networks, plus custom PAC boolean expressions. IPv6 output
+            uses FindProxyForURLEx/isInNetEx, whose support depends on the
+            client. Rules support ordered PAC fallback destinations
+            (DIRECT, PROXY, HTTP, HTTPS, SOCKS, SOCKS4 and SOCKS5) using
+            registered proxies. URL preview cannot resolve DNS or execute
+            custom PAC expressions, so those cases are marked uncertain.
+            Rules can be added singly or from newline-separated bulk input
+            and stay compact until edited. The editor generates the common
+            if/return PAC structure; arbitrary JavaScript that it cannot
+            safely interpret remains preserved and read-only. Remote
+            sources remain read-only and are never published by the app.
           </CardContent>
         </Card>
         <Card>
@@ -131,6 +153,16 @@ export default function DocumentationPage() {
               <p className='mt-1 text-muted-foreground'>
                 Home and the Proxy/PAC workspace switcher. PAC rules
                 refer to the existing proxy inventory.
+              </p>
+            </div>
+            <div>
+              <Badge variant='outline'>/pac?sourceId=...</Badge>
+              <p className='mt-1 text-muted-foreground'>
+                Static Tauri-compatible editor route. Use ?sourceId=... to
+                edit a saved PAC source or ?new=1 to create one from
+                scratch. Source records and rules persist in local browser
+                storage; remote PAC sources are fetched for reading and
+                exported locally because publication is not implemented.
               </p>
             </div>
             <div>
@@ -303,11 +335,13 @@ export default function DocumentationPage() {
             <div>
               <h2 className='font-medium'>Mock mode</h2>
               <p className='mt-1 text-muted-foreground'>
-                Diagnostics and Trace use{' '}
-                <code>http://127.0.0.1:5500</code>. Its{' '}
-                <code>/Policy/Current</code> link is mapped to the{' '}
-                <code>/Policy.html</code> fixture. The sample server
-                is not bundled or started by the app. Home
+                Diagnostics loads{' '}
+                <code>http://127.0.0.1:5500/Policy.html</code>. Trace loads{' '}
+                <code>http://127.0.0.1:5500/Policy/Trace/etuyon.html</code>,
+                and mock trace links keep the same local origin. Diagnostics
+                skips mock policy files that return 404 because the local
+                fixture may not include every link listed by the policy index.
+                The sample server is not bundled or started by the app. Home
                 reachability and PAC Manager do not use Mock mode.
               </p>
             </div>
