@@ -108,38 +108,38 @@ struct PacSourceResponse {
 
 #[tauri::command]
 async fn fetch_pac_source(url: String) -> Result<PacSourceResponse, String> {
-    let parsed = reqwest::Url::parse(&url).map_err(|error| format!("URL PAC inválida: {error}"))?;
+    let parsed = reqwest::Url::parse(&url).map_err(|error| format!("Invalid PAC URL: {error}"))?;
     if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none()
         || !parsed.username().is_empty() || parsed.password().is_some()
     {
-        return Err("La fuente debe ser una URL HTTP(S) válida, sin credenciales embebidas.".into());
+        return Err("The source must be a valid HTTP(S) URL without embedded credentials.".into());
     }
     const MAX_PAC_BYTES: usize = 512 * 1024;
     let client = reqwest::Client::builder()
         .user_agent("SymantecProxyApp PAC manager")
         .danger_accept_invalid_certs(true)
         .build()
-        .map_err(|error| format!("No se pudo preparar la conexión a la fuente PAC: {error}"))?;
+        .map_err(|error| format!("Could not prepare the PAC source connection: {error}"))?;
     let mut response = client.get(parsed.clone()).send().await
-        .map_err(|error| format!("No se pudo descargar la fuente PAC: {error}"))?;
+        .map_err(|error| format!("Could not download the PAC source: {error}"))?;
     let status = response.status();
     let final_url = response.url().to_string();
     let etag = response.headers().get(reqwest::header::ETAG).and_then(|v| v.to_str().ok()).map(str::to_owned);
     let last_modified = response.headers().get(reqwest::header::LAST_MODIFIED).and_then(|v| v.to_str().ok()).map(str::to_owned);
     if !status.is_success() {
-        return Err(format!("La fuente PAC respondió HTTP {}.", status.as_u16()));
+        return Err(format!("The PAC source returned HTTP {}.", status.as_u16()));
     }
     if response.content_length().is_some_and(|size| size > MAX_PAC_BYTES as u64) {
-        return Err("La fuente PAC supera el límite de 512 KiB.".into());
+        return Err("The PAC source exceeds the 512 KiB limit.".into());
     }
     let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(|error| format!("No se pudo leer la fuente PAC: {error}"))? {
+    while let Some(chunk) = response.chunk().await.map_err(|error| format!("Could not read the PAC source: {error}"))? {
         if bytes.len() + chunk.len() > MAX_PAC_BYTES {
-            return Err("La fuente PAC supera el límite de 512 KiB.".into());
+            return Err("The PAC source exceeds the 512 KiB limit.".into());
         }
         bytes.extend_from_slice(&chunk);
     }
-    let content = String::from_utf8(bytes).map_err(|_| "La fuente PAC no contiene texto UTF-8 válido.".to_string())?;
+    let content = String::from_utf8(bytes).map_err(|_| "The PAC source is not valid UTF-8 text.".to_string())?;
     Ok(PacSourceResponse { requested_url: parsed.to_string(), final_url, status: status.as_u16(), etag, last_modified, content })
 }
 
@@ -722,7 +722,11 @@ async fn get_html_data(
                         .join(href)
                         .map_err(|error| format!("Invalid trace link: {error}"))?
                         .to_string(),
-                    None => format!("https://{ippr}:8082{href}"),
+                    None => reqwest::Url::parse("http://127.0.0.1:5500/")
+                        .expect("static mock base URL is valid")
+                        .join(href)
+                        .map_err(|error| format!("Invalid mock trace link: {error}"))?
+                        .to_string(),
                 },
             });
 
@@ -776,6 +780,12 @@ async fn get_html_data(
         let response = file_request.send().await.map_err(|error| {
             describe_request_error(&format!("fetching policy file '{name}'"), &file_url, error)
         })?;
+        // Mock policy indexes can list appliance files that are not included
+        // in the local fixture. Keep loading the available mock data instead
+        // of failing the entire Diagnostics request on those missing files.
+        if use_mock_data && response.status() == reqwest::StatusCode::NOT_FOUND {
+            continue;
+        }
         let response = response.error_for_status().map_err(|error| {
             describe_request_error(&format!("fetching policy file '{name}'"), &file_url, error)
         })?;
