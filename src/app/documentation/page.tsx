@@ -45,13 +45,17 @@ const localKeys = [
   ],
   [
     'data-source-mode',
-    'Mock or Live mode for Diagnostics and Trace only.',
+    'Mock or Live mode for Diagnostics and Trace. Traffic Analysis has its own Static Log and mock Live Stream modes.',
   ],
   [
     'home-workspace',
     'The selected Home workspace: Proxy or PAC Manager.',
   ],
   ['pac-selected-source', 'The selected PAC source.'],
+  [
+    'traffic-analysis-timezone / traffic-analysis-workers',
+    'Traffic Analysis display time zone (UTC by default) and parser worker preference (Auto by default).',
+  ],
   [
     'dark_mode / delete_on_close',
     'Settings preferences. delete_on_close is stored but currently does not trigger close-time cleanup.',
@@ -100,29 +104,30 @@ export default function DocumentationPage() {
           </CardHeader>
           <CardContent className='text-sm text-muted-foreground'>
             The Home workspace manages PAC sources. Select a source or
-            create one from scratch to open its dedicated editor, which
-            edits supported rules, detects conflicts, and exports a
-            generated PAC file. It can also
-            create a local PAC from scratch with a DIRECT fallback. Rules
-            can be organized into groups and filtered without changing
-            global evaluation order; groups move as ordered blocks while
+            create one from scratch to open its dedicated editor,
+            which edits supported rules, detects conflicts, and
+            exports a generated PAC file. It can also create a local
+            PAC from scratch with a DIRECT fallback. Rules can be
+            organized into groups and filtered without changing global
+            evaluation order; groups move as ordered blocks while
             rules retain their order within each group. Groups can be
             collapsed to reduce the visible list. The editor keeps
-            rule creation, routing, URL testing, publishing guidance and a
-            modal PAC preview together, separate from source registration.
-            Conditions include domains, hosts,
-            URL patterns, string matching, regex, IPv4/IPv6 addresses and
-            CIDR networks, plus custom PAC boolean expressions. IPv6 output
-            uses FindProxyForURLEx/isInNetEx, whose support depends on the
-            client. Rules support ordered PAC fallback destinations
-            (DIRECT, PROXY, HTTP, HTTPS, SOCKS, SOCKS4 and SOCKS5) using
-            registered proxies. URL preview cannot resolve DNS or execute
-            custom PAC expressions, so those cases are marked uncertain.
-            Rules can be added singly or from newline-separated bulk input
-            and stay compact until edited. The editor generates the common
-            if/return PAC structure; arbitrary JavaScript that it cannot
-            safely interpret remains preserved and read-only. Remote
-            sources remain read-only and are never published by the app.
+            rule creation, routing, URL testing, publishing guidance
+            and a modal PAC preview together, separate from source
+            registration. Conditions include domains, hosts, URL
+            patterns, string matching, regex, IPv4/IPv6 addresses and
+            CIDR networks, plus custom PAC boolean expressions. IPv6
+            output uses FindProxyForURLEx/isInNetEx, whose support
+            depends on the client. Rules support ordered PAC fallback
+            destinations (DIRECT, PROXY, HTTP, HTTPS, SOCKS, SOCKS4
+            and SOCKS5) using registered proxies. URL preview cannot
+            resolve DNS or execute custom PAC expressions, so those
+            cases are marked uncertain. Rules can be added singly or
+            from newline-separated bulk input and stay compact until
+            edited. The editor generates the common if/return PAC
+            structure; arbitrary JavaScript that it cannot safely
+            interpret remains preserved and read-only. Remote sources
+            remain read-only and are never published by the app.
           </CardContent>
         </Card>
         <Card>
@@ -158,11 +163,12 @@ export default function DocumentationPage() {
             <div>
               <Badge variant='outline'>/pac?sourceId=...</Badge>
               <p className='mt-1 text-muted-foreground'>
-                Static Tauri-compatible editor route. Use ?sourceId=... to
-                edit a saved PAC source or ?new=1 to create one from
-                scratch. Source records and rules persist in local browser
-                storage; remote PAC sources are fetched for reading and
-                exported locally because publication is not implemented.
+                Static Tauri-compatible editor route. Use
+                ?sourceId=... to edit a saved PAC source or ?new=1 to
+                create one from scratch. Source records and rules
+                persist in local browser storage; remote PAC sources
+                are fetched for reading and exported locally because
+                publication is not implemented.
               </p>
             </div>
             <div>
@@ -179,6 +185,20 @@ export default function DocumentationPage() {
               <p className='mt-1 text-muted-foreground'>
                 Starts trace collection; Rust validates that the trace
                 belongs to the selected proxy.
+              </p>
+            </div>
+            <div>
+              <Badge variant='outline'>
+                /Diagnostics/TrafficAnalysis?proxy=...
+              </Badge>
+              <p className='mt-1 text-muted-foreground'>
+                Parses uploaded ELFF access logs and a simulated
+                incremental stream using each log’s #Fields schema. It
+                presents traffic trends, KPIs, rankings, issue
+                signals, schema coverage, and malformed-line
+                diagnostics. This initial release is mock-only for
+                Live Stream and does not connect to appliance
+                access-log endpoints.
               </p>
             </div>
             <div>
@@ -233,7 +253,7 @@ export default function DocumentationPage() {
         </CardHeader>
         <CardContent className='grid gap-4 text-sm md:grid-cols-2'>
           <div>
-            <h2 className='font-medium'>Trace log files</h2>
+            <h2 className='font-medium'>Resolved cache paths</h2>
             <p className='mt-1 text-muted-foreground'>
               The live path below is queried from{' '}
               <code>app.path().app_cache_dir()</code> on this running
@@ -246,7 +266,7 @@ export default function DocumentationPage() {
             </div>
             <p className='mt-2 text-xs text-muted-foreground'>
               These exact paths are queried from the running Tauri
-              app. The files are created when Trace starts, appended
+              app. Trace files are created when Trace starts, appended
               to, and not automatically rotated or deleted.
             </p>
           </div>
@@ -261,9 +281,15 @@ export default function DocumentationPage() {
               the remote source.
             </p>
             <p className='mt-2 text-muted-foreground'>
-              Normal app flows create no temporary files. Rust parser
+              Traffic Analysis temporarily writes every parsed record
+              and diagnostic to{' '}
+              <code>traffic-analysis/*.pending</code>
+              beneath the resolved cache directory. Replacing the log,
+              leaving the page or aborting removes unsaved data; an
+              abnormal shutdown can leave pending files. Rust parser
               tests briefly create{' '}
-              <code>proxytools-parser-*.jsonl</code> in the operating
+              <code>proxytools-parser-*.jsonl</code> and{' '}
+              <code>proxytools-traffic-test-*</code> in the operating
               system’s temp directory, then delete it.
             </p>
             <p className='mt-2 text-xs text-muted-foreground'>
@@ -324,6 +350,49 @@ export default function DocumentationPage() {
               </p>
             </div>
             <div>
+              <h2 className='font-medium'>Traffic Analysis</h2>
+              <p className='mt-1 text-muted-foreground'>
+                Uploaded logs use 8 MiB blocks with one block
+                prefetched while Rust parses rows in parallel. Auto
+                reserves one logical processor when possible and uses
+                up to 8 workers; manual selection supports up to 16,
+                bounded by detected processors. Schema changes, split
+                lines, and results preserve file order. Row and byte
+                totals, field coverage, and the unfiltered timeline
+                cover the entire file. Charts show up to 60 equal time
+                intervals, including quiet periods. Filters, rankings,
+                and the record table analyze the latest 5,000 rows.
+                Progress and worker timings appear in diagnostic
+                output. Mock Live Stream replays the bundled fixture;
+                no real access-log endpoint is contacted in this
+                phase.
+              </p>
+              <p className='mt-1 text-muted-foreground'>
+                After an upload finishes, Save processed log retains
+                every record (raw and normalized fields) and
+                diagnostic in{' '}
+                <code>traffic-analysis/&lt;id&gt;.jsonl</code> under
+                the resolved cache directory;{' '}
+                <code>&lt;id&gt;.json</code> stores a versioned
+                summary, timeline, field coverage, and recent records.
+                Load saved analysis restores this dashboard without
+                reading or parsing the original log. These files
+                remain local, are not encrypted or automatically
+                deleted, and may be larger than the source log. Both
+                files must stay together. Chart test sample provides
+                eight anonymous requests across several minutes and
+                hours.
+              </p>
+              <p className='mt-1 text-muted-foreground'>
+                Log dates are interpreted as UTC. The saved display
+                time zone applies to charts, peaks, record timestamps,
+                and issue timestamps, including daylight saving
+                changes. Raw log fields stay unchanged. Static time
+                ranges count back from the latest retained log
+                timestamp; Live Stream ranges count back from now.
+              </p>
+            </div>
+            <div>
               <h2 className='font-medium'>PAC/WPAD</h2>
               <p className='mt-1 text-muted-foreground'>
                 Downloads an HTTP(S) URL without credentials, follows
@@ -336,13 +405,19 @@ export default function DocumentationPage() {
               <h2 className='font-medium'>Mock mode</h2>
               <p className='mt-1 text-muted-foreground'>
                 Diagnostics loads{' '}
-                <code>http://127.0.0.1:5500/Policy.html</code>. Trace loads{' '}
-                <code>http://127.0.0.1:5500/Policy/Trace/etuyon.html</code>,
-                and mock trace links keep the same local origin. Diagnostics
-                skips mock policy files that return 404 because the local
-                fixture may not include every link listed by the policy index.
-                The sample server is not bundled or started by the app. Home
-                reachability and PAC Manager do not use Mock mode.
+                <code>http://127.0.0.1:5500/Policy.html</code>. Trace
+                loads{' '}
+                <code>
+                  http://127.0.0.1:5500/Policy/Trace/etuyon.html
+                </code>
+                , and mock trace links keep the same local origin.
+                Diagnostics skips mock policy files that return 404
+                because the local fixture may not include every link
+                listed by the policy index. The sample server is not
+                bundled or started by the app. Home reachability and
+                PAC Manager do not use Mock mode. Traffic Analysis has
+                its own bundled mock stream, separate from this HTTP
+                fixture server.
               </p>
             </div>
           </div>
