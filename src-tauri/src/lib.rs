@@ -84,6 +84,13 @@
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 mod utils;
+mod traffic_analysis;
+use crate::traffic_analysis::{
+    abort_access_log_parse, append_access_log_parse_chunk, get_mock_access_log,
+    get_traffic_processing_config, list_traffic_analyses, load_traffic_analysis, parse_access_log,
+    save_traffic_analysis, start_access_log_parse, start_mock_traffic_stream,
+    stop_mock_traffic_stream, AccessLogParseState, TrafficStreamState,
+};
 use regex::Regex;
 use serde::Serialize;
 use std::{fs::{self, OpenOptions}, io::Write, path::{ PathBuf}, sync::{Arc}, time::Duration,  collections::{HashSet }};
@@ -389,6 +396,7 @@ fn get_app_cache_paths(app: AppHandle) -> Result<AppCachePaths, String> {
         .map_err(|error| format!("Could not resolve the application cache directory: {error}"))
         ?;
     Ok(AppCachePaths {
+        traffic_analysis: directory.join("traffic-analysis").display().to_string(),
         raw_log: directory.join("rawLogs.log").display().to_string(),
         json_log: directory.join("logs.jsonl").display().to_string(),
         directory: directory.display().to_string(),
@@ -398,6 +406,7 @@ fn get_app_cache_paths(app: AppHandle) -> Result<AppCachePaths, String> {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AppCachePaths {
+    traffic_analysis: String,
     directory: String,
     raw_log: String,
     json_log: String,
@@ -851,8 +860,10 @@ async fn get_html_data(
 pub fn run() {
     tauri::Builder::default()
     .manage(LogWorkerState::default())
+    .manage(TrafficStreamState::default())
+    .manage(AccessLogParseState::default())
     .plugin(tauri_plugin_opener::init())
-    .invoke_handler(tauri::generate_handler![getproxystatus, start_logs, stop_logs, open_proxy, get_html_data, fetch_pac_source, get_app_cache_paths])
+    .invoke_handler(tauri::generate_handler![getproxystatus, start_logs, stop_logs, open_proxy, get_html_data, fetch_pac_source, get_app_cache_paths, save_traffic_analysis, load_traffic_analysis, list_traffic_analyses, parse_access_log, get_mock_access_log, start_mock_traffic_stream, stop_mock_traffic_stream, start_access_log_parse, append_access_log_parse_chunk, abort_access_log_parse, get_traffic_processing_config])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
 }

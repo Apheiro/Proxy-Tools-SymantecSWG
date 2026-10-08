@@ -5,6 +5,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import {
   Activity,
+  ArrowUpRight,
   FileText,
   Network,
   ShieldCheck,
@@ -144,6 +145,18 @@ function PageBase() {
           </div>
         )}
       </header>
+
+      <Link href={{ pathname: '/Diagnostics/TrafficAnalysis', query: { proxy } }} className='group rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'>
+        <Card className='gap-3 border-primary/20 bg-primary/[0.03] p-4 transition-colors group-hover:border-primary/50 group-hover:bg-primary/[0.06]'>
+          <div className='flex items-center justify-between gap-4'>
+            <div className='flex items-center gap-3'>
+              <span className='flex size-11 items-center justify-center rounded-xl bg-primary/10 text-primary'><Activity className='size-5' /></span>
+              <div><h2 className='font-semibold'>Traffic Analysis</h2><p className='mt-1 text-sm text-muted-foreground'>Explore access log traffic, bandwidth, top talkers, and detected issues.</p></div>
+            </div>
+            <span className='flex items-center gap-2 text-sm font-medium text-primary'>Open analysis <ArrowUpRight className='size-4 transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5' /></span>
+          </div>
+        </Card>
+      </Link>
 
       <section
         className='flex flex-col gap-4'

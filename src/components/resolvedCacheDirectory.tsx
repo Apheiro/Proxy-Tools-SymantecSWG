@@ -7,6 +7,7 @@ type AppCachePaths = {
   directory: string;
   rawLog: string;
   jsonLog: string;
+  trafficAnalysis: string;
 };
 
 type CachePathState =
@@ -59,6 +60,14 @@ export default function ResolvedCacheDirectory() {
           logs.jsonl
         </p>
         <code className='break-all'>{result.paths.jsonLog}</code>
+      </div>
+      <div>
+        <p className='text-[10px] text-muted-foreground'>
+          Traffic Analysis: processed logs and pending files
+        </p>
+        <code className='break-all'>
+          {result.paths.trafficAnalysis}
+        </code>
       </div>
     </div>
   );
