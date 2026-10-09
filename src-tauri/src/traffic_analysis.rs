@@ -1,14 +1,12 @@
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Duration;
 
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 use tauri::Manager;
-use tauri::{AppHandle, Emitter, State};
-use tokio_util::sync::CancellationToken;
+use tauri::{AppHandle, State};
 
 const MOCK_ACCESS_LOG: &str = include_str!("../fixtures/mock_accesslog_main.log");
 
@@ -23,6 +21,8 @@ pub struct AccessLogValue {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccessLogRecord {
+    #[serde(default)]
+    pub issues: Vec<String>,
     pub id: String,
     pub source: String,
     pub schema: Vec<String>,
@@ -63,6 +63,8 @@ pub struct TrafficBucket {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccessLogDataset {
+    #[serde(default)]
+    pub capture_id: Option<String>,
     pub source: String,
     pub timeline: Vec<TrafficBucket>,
     pub fields: Vec<String>,
@@ -76,10 +78,7 @@ pub struct AccessLogDataset {
 }
 
 #[derive(Default)]
-pub struct TrafficStreamState(Mutex<HashMap<String, CancellationToken>>);
-
-#[derive(Default)]
-pub struct AccessLogParseState(Arc<Mutex<HashMap<String, ParseSession>>>);
+pub struct AccessLogParseState(pub(crate) Arc<Mutex<HashMap<String, ParseSession>>>);
 
 impl AccessLogParseState {
     fn lock(&self) -> Result<MutexGuard<'_, HashMap<String, ParseSession>>, String> {
@@ -90,8 +89,9 @@ impl AccessLogParseState {
 }
 
 #[derive(Default)]
-struct ParseSession {
+pub(crate) struct ParseSession {
     source: String,
+    record_source: Option<String>,
     parser: AccessLogParser,
     carry: String,
     fields: Vec<String>,
@@ -101,11 +101,47 @@ struct ParseSession {
     bytes_processed: u64,
     diagnostics_total: usize,
     workers: usize,
+    store: Option<crate::traffic_store::CaptureStore>,
     timeline: BTreeMap<i64, (usize, u64)>,
     archive: Option<std::fs::File>,
     archive_path: Option<std::path::PathBuf>,
     completed: Option<AccessLogDataset>,
     tail: VecDeque<AccessLogRecord>,
+}
+
+pub(crate) fn create_capture_session(
+    app: &AppHandle,
+    source: String,
+    workers: Option<usize>,
+) -> Result<(String, ParseSession), String> {
+    let id = format!(
+        "static-{}-{}",
+        Utc::now().timestamp_micros(),
+        NEXT_PARSE_ID.fetch_add(1, Ordering::Relaxed)
+    );
+    let config = get_traffic_processing_config();
+    let mut session = ParseSession::default();
+    session.store = Some(crate::traffic_store::CaptureStore::create(
+        app,
+        id.clone(),
+        &source,
+    )?);
+    session.source = source;
+    session.workers = workers
+        .unwrap_or(config.recommended_workers)
+        .clamp(1, config.max_workers);
+    Ok((id, session))
+}
+
+pub(crate) fn complete_capture_session(
+    session: &mut ParseSession,
+) -> Result<AccessLogDataset, String> {
+    let dataset = parse_session_chunk(session, "", true)?;
+    if let Some(store) = &session.store {
+        store.complete()?;
+    }
+    session.completed = Some(dataset.clone());
+    Ok(dataset)
 }
 
 impl ParseSession {
@@ -157,14 +193,6 @@ fn timeline_values(map: &BTreeMap<i64, (usize, u64)>) -> Vec<TrafficBucket> {
 }
 
 static NEXT_PARSE_ID: AtomicU64 = AtomicU64::new(1);
-
-impl TrafficStreamState {
-    fn lock(&self) -> Result<MutexGuard<'_, HashMap<String, CancellationToken>>, String> {
-        self.0
-            .lock()
-            .map_err(|_| "Traffic stream state is unavailable.".to_string())
-    }
-}
 
 #[derive(Clone, Default)]
 struct AccessLogParser {
@@ -240,6 +268,7 @@ impl AccessLogParser {
         });
         Some((
             AccessLogRecord {
+                issues: Vec::new(),
                 id: format!("{source}:{sequence}"),
                 source: source.to_string(),
                 schema: self.fields.clone(),
@@ -468,6 +497,7 @@ fn make_dataset(source: &str, content: &str) -> AccessLogDataset {
         add_timeline(&mut timeline, record);
     }
     AccessLogDataset {
+        capture_id: None,
         timeline: timeline_values(&timeline),
         source: source.to_string(),
         fields,
@@ -493,25 +523,12 @@ pub fn start_access_log_parse(
     workers: Option<usize>,
     state: State<'_, AccessLogParseState>,
 ) -> Result<String, String> {
-    let id = format!(
-        "static-{}-{}",
-        Utc::now().timestamp_micros(),
-        NEXT_PARSE_ID.fetch_add(1, Ordering::Relaxed)
-    );
-    let directory = traffic_archive_dir(&app)?;
-    let archive_path = directory.join(format!("{id}.pending"));
-    let archive = std::fs::File::create(&archive_path)
-        .map_err(|e| format!("Could not prepare processed log: {e}"))?;
+    let (id, session) = create_capture_session(&app, source.clone(), workers)?;
     let log_source = source.clone();
     let config = get_traffic_processing_config();
     let workers = workers
         .unwrap_or(config.recommended_workers)
         .clamp(1, config.max_workers);
-    let mut session = ParseSession::default();
-    session.source = source;
-    session.workers = workers;
-    session.archive = Some(archive);
-    session.archive_path = Some(archive_path);
     state.lock()?.insert(id.clone(), session);
     eprintln!(
         "[traffic-analysis] parse_started id={} source={} workers={} logical_cpus={}",
@@ -525,16 +542,26 @@ pub async fn append_access_log_parse_chunk(
     parse_id: String,
     chunk: String,
     is_final: bool,
+    file_source: Option<String>,
+    is_file_start: Option<bool>,
+    is_file_end: Option<bool>,
     state: State<'_, AccessLogParseState>,
 ) -> Result<AccessLogDataset, String> {
     let sessions = Arc::clone(&state.0);
     tokio::task::spawn_blocking(move || {
         let mut sessions = sessions.lock().map_err(|_| "Access log parser state is unavailable.".to_string())?;
         let session = sessions.get_mut(&parse_id).ok_or_else(|| "The access log parse session expired.".to_string())?;
+        if is_file_start.unwrap_or(false) {
+            if !session.carry.is_empty() { return Err("Finish the previous log file before starting another.".into()); }
+            session.parser = AccessLogParser::default();
+            session.record_source = file_source;
+        }
         let started = std::time::Instant::now();
-        let dataset = parse_session_chunk(session, &chunk, is_final)?;
+        let dataset = parse_session_chunk(session, &chunk, is_final || is_file_end.unwrap_or(false))?;
+        if is_file_end.unwrap_or(false) { session.parser = AccessLogParser::default(); }
         eprintln!("[traffic-analysis] source={} chunk_bytes={} final={} workers={} elapsed_ms={} fields={} received_lines={} parsed_records={} malformed={} traffic_bytes={}", dataset.source, chunk.len(), is_final, session.workers, started.elapsed().as_millis(), dataset.fields.len(), dataset.received_lines, dataset.records_processed, dataset.diagnostics_total, dataset.bytes_processed);
         if is_final {
+            if let Some(store) = &session.store { store.complete()?; }
             if let Some(file) = session.archive.as_mut() { file.sync_all().map_err(|e| format!("Could not flush processed log: {e}"))?; }
             let mut snapshot = dataset.clone();
             snapshot.records = session.tail.iter().cloned().collect();
@@ -544,7 +571,7 @@ pub async fn append_access_log_parse_chunk(
     }).await.map_err(|error| format!("Access log processing task failed: {error}"))?
 }
 
-fn parse_session_chunk(
+pub(crate) fn parse_session_chunk(
     session: &mut ParseSession,
     chunk: &str,
     is_final: bool,
@@ -564,7 +591,8 @@ fn parse_session_chunk(
     let incomplete = data.split_off(complete_end);
     session.carry = incomplete;
 
-    let (records, diagnostics) = consume_access_log_block(session, &data, &source)?;
+    let record_source = session.record_source.clone().unwrap_or_else(|| source.clone());
+    let (records, diagnostics) = consume_access_log_block(session, &data, &record_source)?;
 
     let field_availability = session
         .fields
@@ -590,7 +618,8 @@ fn parse_session_chunk(
     while session.tail.len() > 5000 {
         session.tail.pop_front();
     }
-    Ok(AccessLogDataset {
+    let dataset = AccessLogDataset {
+        capture_id: session.store.as_ref().map(|store| store.id.clone()),
         timeline: timeline_values(&session.timeline),
         source: source.clone(),
         fields: session.fields.clone(),
@@ -601,7 +630,11 @@ fn parse_session_chunk(
         received_lines: session.received_lines,
         records_processed: session.records_processed,
         bytes_processed: session.bytes_processed,
-    })
+    };
+    if let Some(store) = &session.store {
+        store.snapshot(&dataset)?;
+    }
+    Ok(dataset)
 }
 
 #[tauri::command]
@@ -637,7 +670,12 @@ struct ParsedBatch {
     diagnostics_total: usize,
 }
 
-fn parse_jobs(jobs: &[ParseJob<'_>], source: &str, archive: bool) -> Result<ParsedBatch, String> {
+fn parse_jobs(
+    jobs: &[ParseJob<'_>],
+    source: &str,
+    archive: bool,
+    indexed: bool,
+) -> Result<ParsedBatch, String> {
     let mut result = ParsedBatch::default();
     for job in jobs {
         let (record, diagnostic) = if job.parser.fields.is_empty() {
@@ -692,7 +730,7 @@ fn parse_jobs(jobs: &[ParseJob<'_>], source: &str, archive: bool) -> Result<Pars
                 })
                 .sum::<u64>();
             result.records_processed += 1;
-            if result.records.len() == 5000 {
+            if !indexed && result.records.len() == 5000 {
                 result.records.pop_front();
             }
             result.records.push_back(record);
@@ -707,7 +745,7 @@ fn parse_jobs(jobs: &[ParseJob<'_>], source: &str, archive: bool) -> Result<Pars
                 result.archive_rows.push(b'\n');
             }
             result.diagnostics_total += 1;
-            if result.diagnostics.len() == 200 {
+            if !indexed && result.diagnostics.len() == 200 {
                 result.diagnostics.pop_front();
             }
             result.diagnostics.push_back(diagnostic);
@@ -746,13 +784,14 @@ fn consume_access_log_block(
     }
     let workers = session.workers.max(1).min(jobs.len().max(1));
     let archive = session.archive.is_some();
+    let indexed = session.store.is_some();
     let parsed = if workers == 1 || jobs.len() < 256 {
-        vec![parse_jobs(&jobs, source, archive)?]
+        vec![parse_jobs(&jobs, source, archive, indexed)?]
     } else {
         std::thread::scope(|scope| {
             let handles: Vec<_> = jobs
                 .chunks(jobs.len().div_ceil(workers))
-                .map(|batch| scope.spawn(move || parse_jobs(batch, source, archive)))
+                .map(|batch| scope.spawn(move || parse_jobs(batch, source, archive, indexed)))
                 .collect();
             let mut parsed = Vec::with_capacity(handles.len());
             for handle in handles {
@@ -767,7 +806,13 @@ fn consume_access_log_block(
     };
     let mut records = Vec::new();
     let mut diagnostics = Vec::new();
-    for batch in parsed {
+    for mut batch in parsed {
+        if let Some(store) = &mut session.store {
+            store.ingest(
+                batch.records.make_contiguous(),
+                batch.diagnostics.make_contiguous(),
+            )?;
+        }
         if let Some(file) = session.archive.as_mut() {
             file.write_all(&batch.archive_rows).map_err(|e| {
                 format!("Could not write processed log (check free disk space): {e}")
@@ -786,11 +831,13 @@ fn consume_access_log_block(
         session.bytes_processed += batch.bytes_processed;
         session.records_processed += batch.records_processed;
         session.diagnostics_total += batch.diagnostics_total;
-        records.extend(batch.records);
-        diagnostics.extend(batch.diagnostics);
+        if !indexed {
+            records.extend(batch.records);
+            diagnostics.extend(batch.diagnostics);
+        }
     }
-    // Summaries cover every row; only records that can survive the UI retention limit
-    // and a bounded diagnostic sample need to cross IPC.
+    // Captured sessions persist complete batches and send metadata through IPC.
+    // The standalone compatibility parser retains a bounded preview only.
     if records.len() > 5000 {
         records.drain(..records.len() - 5000);
     }
@@ -853,6 +900,15 @@ pub async fn save_traffic_analysis(
     state: State<'_, AccessLogParseState>,
 ) -> Result<String, String> {
     let sessions = Arc::clone(&state.0);
+    if crate::traffic_store::path(&app, &parse_id)?.is_file() {
+        return tokio::task::spawn_blocking(move || {
+            // Serialize Save with session disposal, including navigation cleanup.
+            let _sessions = sessions.lock().map_err(|e| e.to_string())?;
+            crate::traffic_store::save(&app, &parse_id)
+        })
+            .await
+            .map_err(|e| e.to_string())?;
+    }
     tokio::task::spawn_blocking(move || {
         let mut sessions = sessions.lock().map_err(|e| e.to_string())?;
         let session = sessions
@@ -916,7 +972,44 @@ fn read_saved(path: &std::path::Path) -> Result<SavedTrafficAnalysis, String> {
 #[tauri::command]
 pub async fn load_traffic_analysis(app: AppHandle, id: String) -> Result<AccessLogDataset, String> {
     tokio::task::spawn_blocking(move || {
-        read_saved(&archive_path(&app, &id)?).map(|saved| saved.dataset)
+        if crate::traffic_store::path(&app, &id)?.is_file() {
+            return crate::traffic_store::dataset(&app, &id);
+        }
+        // Older JSONL saves are indexed once, retaining their complete records.
+        use std::io::BufRead;
+        let legacy = archive_path(&app, &id)?;
+        let mut saved = read_saved(&legacy)?.dataset;
+        let mut store =
+            crate::traffic_store::CaptureStore::create(&app, id.clone(), &saved.source)?;
+        let mut records = Vec::new();
+        let mut diagnostics = Vec::new();
+        for line in std::io::BufReader::new(
+            std::fs::File::open(legacy.with_extension("jsonl")).map_err(|e| e.to_string())?,
+        )
+        .lines()
+        {
+            let json: serde_json::Value = serde_json::from_str(&line.map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
+            if let Some(diagnostic) = json.get("diagnostic") {
+                diagnostics
+                    .push(serde_json::from_value(diagnostic.clone()).map_err(|e| e.to_string())?);
+            } else {
+                records.push(serde_json::from_value(json).map_err(|e| e.to_string())?);
+            }
+            if records.len() + diagnostics.len() >= 1000 {
+                store.ingest(&records, &diagnostics)?;
+                records.clear();
+                diagnostics.clear();
+            }
+        }
+        store.ingest(&records, &diagnostics)?;
+        saved.capture_id = Some(id.clone());
+        saved.records.clear();
+        saved.diagnostics.clear();
+        store.snapshot(&saved)?;
+        store.complete()?;
+        crate::traffic_store::save(&app, &id)?;
+        Ok(saved)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -925,10 +1018,25 @@ pub async fn load_traffic_analysis(app: AppHandle, id: String) -> Result<AccessL
 #[tauri::command]
 pub async fn list_traffic_analyses(app: AppHandle) -> Result<Vec<TrafficArchiveInfo>, String> {
     tokio::task::spawn_blocking(move || {
-        let mut entries = Vec::new();
+        let mut entries: Vec<TrafficArchiveInfo> = crate::traffic_store::list(&app)?
+            .into_iter()
+            .map(|c| TrafficArchiveInfo {
+                id: c.id,
+                source: c.source,
+                records: c.records,
+                saved_at: c.saved_at,
+                path: c.path,
+            })
+            .collect();
         for entry in std::fs::read_dir(traffic_archive_dir(&app)?).map_err(|e| e.to_string())? {
             let path = entry.map_err(|e| e.to_string())?.path();
             if path.extension().is_some_and(|ext| ext == "json") {
+                if entries.iter().any(|entry| {
+                    path.file_stem()
+                        .is_some_and(|name| name.to_string_lossy() == entry.id)
+                }) {
+                    continue;
+                }
                 if let Ok(saved) = read_saved(&path) {
                     entries.push(TrafficArchiveInfo {
                         id: path
@@ -949,71 +1057,6 @@ pub async fn list_traffic_analyses(app: AppHandle) -> Result<Vec<TrafficArchiveI
     })
     .await
     .map_err(|e| e.to_string())?
-}
-
-#[tauri::command]
-pub async fn start_mock_traffic_stream(
-    app: AppHandle,
-    stream_id: String,
-    state: State<'_, TrafficStreamState>,
-) -> Result<(), String> {
-    let token = CancellationToken::new();
-    {
-        let mut streams = state.lock()?;
-        if let Some(previous) = streams.insert(stream_id.clone(), token.clone()) {
-            previous.cancel();
-        }
-    }
-    let seed = make_dataset("mock-live", MOCK_ACCESS_LOG);
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_millis(700));
-        let mut index = 0usize;
-        let mut sequence = 0usize;
-        loop {
-            tokio::select! {
-                _ = token.cancelled() => break,
-                _ = interval.tick() => {
-                    if seed.records.is_empty() { break; }
-                    let seed_record = &seed.records[index % seed.records.len()];
-                    let fields = seed_record.schema.clone();
-                    let mut raw = seed_record.raw_line.clone();
-                    let mut tokens = tokenize_elff(&raw);
-                    let now: DateTime<Utc> = Utc::now();
-                    for (field, value) in [("date", now.format("%Y-%m-%d").to_string()), ("time", now.format("%H:%M:%S").to_string())] {
-                        if let Some(position) = fields.iter().position(|name| name == field) { if position < tokens.len() { tokens[position] = value; } }
-                    }
-                    // Periodic traffic bursts are generated by replaying the heavier mock records more often.
-                    raw = tokens.join(" ");
-                    let stream_parser = AccessLogParser { fields: fields.clone() };
-                    sequence += 1;
-                    if let Some((record, diagnostic)) = stream_parser.parse_line(&raw, "mock-live", sequence) {
-                        let diagnostic_count = usize::from(diagnostic.is_some());
-                        let bytes_processed = ["cs-bytes", "sc-bytes"].iter().filter_map(|name| record.raw_fields.get(*name)?.value.as_deref()?.parse::<u64>().ok()).sum();
-                        let dataset = AccessLogDataset {
-                            timeline: { let mut map = BTreeMap::new(); add_timeline(&mut map, &record); timeline_values(&map) },
-                            source: "mock-live".to_string(), fields: fields.clone(), records: vec![record],
-                            diagnostics: diagnostic.into_iter().collect(), field_availability: seed.field_availability.clone(), received_lines: 1,
-                            records_processed: sequence, bytes_processed, diagnostics_total: diagnostic_count,
-                        };
-                        let _ = app.emit("traffic-analysis:update", (stream_id.clone(), dataset));
-                    }
-                    index = (index + 3) % seed.records.len();
-                }
-            }
-        }
-    });
-    Ok(())
-}
-
-#[tauri::command]
-pub fn stop_mock_traffic_stream(
-    stream_id: String,
-    state: State<'_, TrafficStreamState>,
-) -> Result<(), String> {
-    if let Some(token) = state.lock()?.remove(&stream_id) {
-        token.cancel();
-    }
-    Ok(())
 }
 
 #[cfg(test)]

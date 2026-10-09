@@ -4,6 +4,7 @@ export type LogValue = {
   availability: string;
 };
 export type TrafficRecord = {
+  issues?: string[];
   id: string;
   source: string;
   schema: string[];
@@ -14,6 +15,7 @@ export type TrafficRecord = {
   malformed: boolean;
 };
 export type TrafficDataset = {
+  captureId?: string | null;
   source: string;
   timeline: { epoch: number; requests: number; bytes: number }[];
   fields: string[];
@@ -47,9 +49,7 @@ export const bytesOf = (record: TrafficRecord) =>
     0,
   );
 export const destinationOf = (record: TrafficRecord) =>
-  fieldValue(record, 'cs-host') ||
-  fieldValue(record, 'cs-uri-path') ||
-  'Unknown destination';
+  fieldValue(record, 'cs-host') || 'Unknown destination';
 export const totalBytes = (records: TrafficRecord[]) =>
   records.reduce((sum, record) => sum + bytesOf(record), 0);
 export const formatBytes = (value: number) => {
@@ -222,28 +222,10 @@ export function mergeDataset(
   const fields = [
     ...new Set([...current.fields, ...incoming.fields]),
   ];
-  const live = incoming.source === 'mock-live';
   return {
     ...incoming,
-    timeline: live
-      ? [
-          ...[...current.timeline, ...incoming.timeline]
-            .reduce((map, item) => {
-              const prior = map.get(item.epoch) ?? {
-                epoch: item.epoch,
-                requests: 0,
-                bytes: 0,
-              };
-              map.set(item.epoch, {
-                epoch: item.epoch,
-                requests: prior.requests + item.requests,
-                bytes: prior.bytes + item.bytes,
-              });
-              return map;
-            }, new Map<number, TrafficDataset['timeline'][number]>())
-            .values(),
-        ]
-      : incoming.timeline,
+    // Rust owns cumulative counters and timeline for both file and HTTP sources.
+    timeline: incoming.timeline,
     fields,
     records,
     diagnostics: [
@@ -251,55 +233,16 @@ export function mergeDataset(
       ...incoming.diagnostics,
     ].slice(-200),
     fieldAvailability: incoming.fieldAvailability,
-    receivedLines: live
-      ? current.receivedLines + incoming.receivedLines
-      : incoming.receivedLines,
+    receivedLines: incoming.receivedLines,
     recordsProcessed: incoming.recordsProcessed,
-    bytesProcessed: live
-      ? current.bytesProcessed + incoming.bytesProcessed
-      : incoming.bytesProcessed,
-    diagnosticsTotal: live
-      ? current.diagnosticsTotal + incoming.diagnosticsTotal
-      : incoming.diagnosticsTotal,
+    bytesProcessed: incoming.bytesProcessed,
+    diagnosticsTotal: incoming.diagnosticsTotal,
   };
 }
 
 export function evaluateRecord(record: TrafficRecord) {
-  const action = fieldValue(record, 's-action').toUpperCase();
-  const status = Number(fieldValue(record, 'sc-status'));
-  const text = Object.entries(record.rawFields)
-    .filter(([key]) =>
-      /exception|filter|threat|virus|ocsp|icap|certificate/i.test(
-        key,
-      ),
-    )
-    .map(([, value]) => value.value ?? value.raw)
-    .join(' ')
-    .toLowerCase();
-  const issues: string[] = [];
-  if (/authentication_failed|auth.*fail/.test(text) || status === 407)
-    issues.push('Authentication failure');
-  else if (status >= 400 && status < 500)
-    issues.push('HTTP client error');
-  if (
-    fieldValue(record, 'x-exception-id') &&
-    fieldValue(record, 'x-exception-id') !== '-'
-  )
-    issues.push('Proxy exception');
-  if (
-    fieldValue(record, 'sc-filter-result') &&
-    fieldValue(record, 'sc-filter-result') !== '-'
-  )
-    issues.push('Filter result');
-  if (/denied|blocked/.test(action)) issues.push('Denied by policy');
-  if (/failed|error/.test(action) || status >= 500)
-    issues.push('Transaction/server error');
-  if (/ocsp|certificate|cert_/.test(text))
-    issues.push('SSL / certificate');
-  if (/icap/.test(text)) issues.push('ICAP');
-  if (/virus|threat/.test(text)) issues.push('Threat / malware');
-  if (record.malformed) issues.push('Malformed record');
-  return issues;
+  // Native ingestion classifies issues once; informative filter results are not errors.
+  return record.issues ?? [];
 }
 
 export function ranked(

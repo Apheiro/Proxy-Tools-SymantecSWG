@@ -84,17 +84,23 @@
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 mod utils;
+mod proxy_transport;
+mod credentials;
+use credentials::{read_management_credentials, save_management_credentials, delete_management_credentials};
+use proxy_transport::clear_management_sessions;
 mod traffic_analysis;
+mod traffic_store;
+mod traffic_stream;
 use crate::traffic_analysis::{
     abort_access_log_parse, append_access_log_parse_chunk, get_mock_access_log,
     get_traffic_processing_config, list_traffic_analyses, load_traffic_analysis, parse_access_log,
-    save_traffic_analysis, start_access_log_parse, start_mock_traffic_stream,
-    stop_mock_traffic_stream, AccessLogParseState, TrafficStreamState,
+    save_traffic_analysis, start_access_log_parse, AccessLogParseState,
 };
+use crate::traffic_store::query_traffic_capture;
+use crate::traffic_stream::{get_traffic_access_logs, start_traffic_stream, stop_traffic_stream, TrafficStreamState};
 use regex::Regex;
 use serde::Serialize;
-use std::{fs::{self, OpenOptions}, io::Write, path::{ PathBuf}, sync::{Arc}, time::Duration,  collections::{HashSet }};
-use reqwest_cookie_store::{CookieStore, CookieStoreMutex};
+use std::{fs::{self, OpenOptions}, io::Write, path::{ PathBuf}, time::Duration,  collections::{HashSet }};
 use chrono::Utc;
 use tokio::process::Command;
 use crate::utils::{append_json_for_blocks, cap_str, get_regex};
@@ -158,6 +164,9 @@ async fn open_proxy(
   password: String,
 ) -> tauri::Result<()> {
   let url: tauri::Url = url.parse().map_err(tauri::Error::InvalidUrl)?;
+  if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some() {
+      return Err(tauri::Error::Anyhow(anyhow::anyhow!("Management windows require HTTPS without embedded credentials.")));
+  }
   let window = WebviewWindowBuilder::new(
       &app,
       "tab-viewer".to_string(),
@@ -199,9 +208,17 @@ async fn open_proxy(
         }
       };
 
+      let allowed_origin = url.origin();
       let auth_handler = BasicAuthenticationRequestedEventHandler::create(Box::new(
         move |_sender, args| {
           if let Some(args) = args {
+            let mut uri = windows::core::PWSTR::null();
+            args.Uri(&mut uri)?;
+            let uri = webview2_com::take_pwstr(uri);
+            if tauri::Url::parse(&uri).ok().is_none_or(|requested| requested.origin() != allowed_origin) {
+                args.SetCancel(true)?;
+                return Ok(());
+            }
             let response = args.Response()?;
             let username_wide: Vec<u16> = username
               .encode_utf16()
@@ -515,15 +532,12 @@ async fn start_logs(
     let interval_secs = 5;
     
 
+    let request_url = reqwest::Url::parse(&url).map_err(|_| "Invalid trace URL.")?;
+    let client = match proxy_transport::client_for(&request_url, &user, &pass, use_mock_data) {
+        Ok(client) => client,
+        Err(error) => { state.cancel.lock().unwrap().take(); return Err(error); }
+    };
     tauri::async_runtime::spawn(async move {
-        let jar = Arc::new(CookieStoreMutex::new(CookieStore::default()));
-        let client = reqwest::Client::builder()
-            .cookie_provider(jar)
-            .user_agent("trace-tools/0.1")
-            .danger_accept_invalid_certs(true)
-            .build()
-            .expect("client");
-
         let cache_dir = match check_cache_dir(&app) {
             Ok(p) => p,
             Err(e) => { let _ = app.emit("logs:error", &format!("cache_dir: {e}")); return; }
@@ -543,13 +557,11 @@ async fn start_logs(
 
         println!("starting log worker for url: {}", url);
         while !token.is_cancelled() {
-            let mut req = client.get(&url);
-            if !user.is_empty() && !pass.is_empty() { 
-                req = req.basic_auth(&user, Some(&pass)); 
-            }
+            let req = client.get(&url);
             println!("requesting: {}", url);
             match req.send().await {
                 Ok(resp) => {
+                    if token.is_cancelled() { break; }
                     let status = resp.status();
                     if !status.is_success() {
                         let request_url = reqwest::Url::parse(&url).unwrap();
@@ -558,6 +570,10 @@ async fn start_logs(
                             let _ = app.emit("logs:error", &message);
                         }
                         last_error = Some(message);
+                        if status == reqwest::StatusCode::UNAUTHORIZED {
+                            proxy_transport::invalidate(&request_url, &user, &pass, use_mock_data);
+                            break;
+                        }
                         tokio::time::sleep(Duration::from_secs(interval_secs)).await;
                         continue;
                     }
@@ -574,6 +590,7 @@ async fn start_logs(
                             continue;
                         }
                     };
+                    if token.is_cancelled() { break; }
                     last_error = None;
                     let html = html_escape::decode_html_entities(&html_coded).into_owned();
 
@@ -677,21 +694,12 @@ async fn get_html_data(
             .map_err(|error| format!("Could not build policy URL: {error}"))?
     };
 
-    let jar = Arc::new(CookieStoreMutex::new(CookieStore::default()));
-    let client = reqwest::Client::builder()
-        .cookie_provider(jar)
-        .user_agent("trace-tools/0.1")
-        .danger_accept_invalid_certs(true)
-        .build()
-        .map_err(|error| format!("Could not prepare the proxy request: {error}"))?;
-
-    let mut policy_request = client.get(url.clone());
-    if !userpr.is_empty() && !passpr.is_empty() {
-        policy_request = policy_request.basic_auth(userpr, Some(passpr));
-    }
+    let client = proxy_transport::client_for(&url, userpr, passpr, use_mock_data)?;
+    let policy_request = client.get(url.clone()).timeout(Duration::from_secs(30));
     let policy_response = policy_request.send().await.map_err(|error| {
         describe_request_error("fetching the policy index", &url, error)
     })?;
+    if policy_response.status() == reqwest::StatusCode::UNAUTHORIZED { proxy_transport::invalidate(&url, userpr, passpr, use_mock_data); }
     let policy_response = policy_response.error_for_status().map_err(|error| {
         describe_request_error("fetching the policy index", &url, error)
     })?;
@@ -782,13 +790,11 @@ async fn get_html_data(
             }
             file_url
         };
-        let mut file_request = client.get(file_url.clone());
-        if !userpr.is_empty() && !passpr.is_empty() {
-            file_request = file_request.basic_auth(userpr, Some(passpr));
-        }
+        let file_request = client.get(file_url.clone()).timeout(Duration::from_secs(30));
         let response = file_request.send().await.map_err(|error| {
             describe_request_error(&format!("fetching policy file '{name}'"), &file_url, error)
         })?;
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED { proxy_transport::invalidate(&url, userpr, passpr, use_mock_data); }
         // Mock policy indexes can list appliance files that are not included
         // in the local fixture. Keep loading the available mock data instead
         // of failing the entire Diagnostics request on those missing files.
@@ -863,7 +869,7 @@ pub fn run() {
     .manage(TrafficStreamState::default())
     .manage(AccessLogParseState::default())
     .plugin(tauri_plugin_opener::init())
-    .invoke_handler(tauri::generate_handler![getproxystatus, start_logs, stop_logs, open_proxy, get_html_data, fetch_pac_source, get_app_cache_paths, save_traffic_analysis, load_traffic_analysis, list_traffic_analyses, parse_access_log, get_mock_access_log, start_mock_traffic_stream, stop_mock_traffic_stream, start_access_log_parse, append_access_log_parse_chunk, abort_access_log_parse, get_traffic_processing_config])
+    .invoke_handler(tauri::generate_handler![read_management_credentials, save_management_credentials, delete_management_credentials, clear_management_sessions, getproxystatus, start_logs, stop_logs, open_proxy, get_html_data, fetch_pac_source, get_app_cache_paths, save_traffic_analysis, load_traffic_analysis, list_traffic_analyses, parse_access_log, get_mock_access_log, get_traffic_access_logs, start_traffic_stream, stop_traffic_stream, start_access_log_parse, append_access_log_parse_chunk, abort_access_log_parse, get_traffic_processing_config, query_traffic_capture])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
 }

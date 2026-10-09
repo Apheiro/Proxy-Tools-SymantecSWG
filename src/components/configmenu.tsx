@@ -28,15 +28,15 @@ import {
 import { FormLabel } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Switch } from '@/components/ui/switch';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Switch } from '@/components/ui/switch';
 import useTheme from '@/hook/useTheme';
-import useDataSourceMode from '@/lib/useDataSourceMode';
 import {
-  deleteLocalStorage,
-  getLocalStorage,
-  postLocalStorage,
-} from '@/lib/utilsClient';
+  removeCredentials,
+  storeCredentials,
+} from '@/lib/credentialStore';
+import useDataSourceMode from '@/lib/useDataSourceMode';
+import { getLocalStorage, postLocalStorage } from '@/lib/utilsClient';
 
 const credentialSchema = v.object({
   username: v.pipe(
@@ -132,7 +132,7 @@ function CredentialsDialog({
                     </p>
                     <p className='text-xs text-muted-foreground'>
                       {mode === 'live'
-                        ? 'HTTPS certificate checks are enabled.'
+                        ? 'Use the existing management TLS compatibility mode.'
                         : 'Switch on to contact the configured proxy.'}
                     </p>
                   </div>
@@ -148,8 +148,8 @@ function CredentialsDialog({
                 <div className='mt-3 flex items-start gap-2 text-[11px] leading-relaxed text-muted-foreground'>
                   <ShieldCheck className='mt-0.5 size-3.5 shrink-0' />
                   Live requests use the selected proxy and saved
-                  credentials. Private or self-signed certificates may
-                  require CA support before connecting.
+                  credentials. Rust accepts untrusted management
+                  certificates in the current environment.
                 </div>
               </section>
 
@@ -176,8 +176,9 @@ function CredentialsDialog({
                   })}
                 >
                   <p className='text-xs text-muted-foreground'>
-                    Credentials are stored in this app and sent only
-                    with proxy requests.
+                    Saved credentials are protected by Windows
+                    Credential Manager. Mock requests never include
+                    them.
                   </p>
 
                   <div className='flex flex-col gap-2'>
@@ -303,14 +304,18 @@ export default function ConfigMenu({
     null,
   );
   const saveCredentials = (cred: Credentials) => {
-    postLocalStorage('credentials', cred);
-    setCredentials(cred);
-    toast.success('Credentials saved successfully.');
+    void storeCredentials(cred)
+      .then(() => {
+        setCredentials(cred);
+        toast.success('Credentials saved securely.');
+      })
+      .catch((error) => toast.error(String(error)));
   };
 
   const deleteCredentials = () => {
-    deleteLocalStorage('credentials');
-    setCredentials(null);
+    void removeCredentials('credentials')
+      .then(() => setCredentials(null))
+      .catch((error) => toast.error(String(error)));
   };
 
   useEffect(() => {

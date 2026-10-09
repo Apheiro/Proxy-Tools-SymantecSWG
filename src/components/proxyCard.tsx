@@ -33,7 +33,8 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { TooltipOne } from '@/components/ui/tooltip';
 import useUrlResolver from '@/hook/useUrlResolver';
-import { getLocalStorage, postLocalStorage } from '@/lib/utilsClient';
+import { storeCredentials } from '@/lib/credentialStore';
+import { getLocalStorage } from '@/lib/utilsClient';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 
@@ -77,11 +78,14 @@ function LoginRequiredDialog({
   });
 
   const saveCredentials = (cred: Credentials) => {
-    postLocalStorage('one-time-credentials', cred);
-    toast.success('Credentials validated successfully.');
-    setOpen(false);
-    if (onCredentials) onCredentials(cred);
-    else router.push(url);
+    void storeCredentials(cred, false)
+      .then(() => {
+        toast.success('Session credentials ready.');
+        setOpen(false);
+        if (onCredentials) onCredentials(cred);
+        else router.push(url);
+      })
+      .catch((error) => toast.error(String(error)));
   };
 
   return (

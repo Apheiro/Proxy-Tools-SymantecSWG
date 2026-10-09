@@ -1,6 +1,8 @@
 'use client';
 
+import { invoke } from '@tauri-apps/api/core';
 import { useCallback, useEffect, useState } from 'react';
+import { clearScrapingCache } from '@/lib/scrapingCache';
 import { getLocalStorage, postLocalStorage } from '@/lib/utilsClient';
 
 export type DataSourceMode = 'mock' | 'live';
@@ -29,6 +31,8 @@ export default function useDataSourceMode() {
   }, []);
 
   const setMode = useCallback((nextMode: DataSourceMode) => {
+    clearScrapingCache();
+    void invoke('clear_management_sessions').catch(() => undefined);
     postLocalStorage(STORAGE_KEY, nextMode);
     setModeState(nextMode);
     window.dispatchEvent(new Event(CHANGE_EVENT));

@@ -9,13 +9,13 @@ import {
 } from '@mantine/hooks';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import dayjs from 'dayjs';
 import {
   Activity,
   ShieldAlert,
   ShieldCheck,
   Timer,
 } from 'lucide-react';
-import dayjs from 'dayjs';
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState } from 'react';
 import { toast } from 'sonner';
@@ -25,6 +25,7 @@ import TransactionCard from '@/components/transactionCard';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
+import { useCredentialRevision } from '@/lib/credentialStore';
 import evaluatePolicyMatchesFn from '@/lib/evaluatePolicyMatches';
 import getCredentials from '@/lib/getCredentials';
 import useDataSourceMode from '@/lib/useDataSourceMode';
@@ -78,6 +79,7 @@ function PageBase() {
     'url' | 'transaction' | 'user' | 'ip'
   >('url');
   const { mode, ready: modeReady } = useDataSourceMode();
+  const credentialRevision = useCredentialRevision();
 
   //logs collector
   useEffect(() => {
@@ -146,7 +148,9 @@ function PageBase() {
         },
       });
     })().catch((error: unknown) => {
-      toast.error(`Could not start trace collection: ${errorMessage(error)}`);
+      toast.error(
+        `Could not start trace collection: ${errorMessage(error)}`,
+      );
     });
 
     return () => {
@@ -155,7 +159,7 @@ function PageBase() {
       unlistenError?.();
       void invoke('stop_logs');
     };
-  }, [mode, modeReady, searchParams]);
+  }, [mode, modeReady, searchParams, credentialRevision]);
 
   //open advance modal
   useDidUpdate(() => {
