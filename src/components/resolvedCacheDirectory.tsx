@@ -63,7 +63,7 @@ export default function ResolvedCacheDirectory() {
       </div>
       <div>
         <p className='text-[10px] text-muted-foreground'>
-          Traffic Analysis: processed logs and pending files
+          Traffic Analysis: indexed captures and working files
         </p>
         <code className='break-all'>
           {result.paths.trafficAnalysis}
