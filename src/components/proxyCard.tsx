@@ -235,6 +235,20 @@ export default function ProxyCard({
           proxy.hostinfo.ip.split(/\s+/).filter(Boolean).length === 1
         ? proxy.hostinfo.ip
         : proxy.hostname;
+  const isIpLiteral = (value: string) =>
+    /^\d{1,3}(?:\.\d{1,3}){3}$/.test(value) || value.includes(':');
+  const hasHostname = [proxy.hostinfo?.hostname, proxy.hostname].some(
+    (value) => {
+      const name = value?.trim() ?? '';
+      return (
+        name !== '' &&
+        !/^(?:unknown|unkown)$/i.test(name) &&
+        !isIpLiteral(name)
+      );
+    },
+  );
+  const reverseHostnameUnavailable =
+    isIpLiteral(proxyAddress) && !hasHostname;
 
   const openProxy = (url: string, credentials?: Credentials) => {
     const auth =
@@ -294,7 +308,23 @@ export default function ProxyCard({
         <p className='text-xs text-muted-foreground self-end'>
           {dayjs(proxy.last_check).format('MM/DD/YYYY hh:mm:ss A')}
         </p>
-        <CardTitle>{proxy.hostname}</CardTitle>
+        <CardTitle className='flex items-center gap-2'>
+          <span>{proxy.hostname}</span>
+          {reverseHostnameUnavailable && (
+            <TooltipOne
+              classNameContent='max-w-72'
+              content='The hostname could not be retrieved through reverse DNS lookup using a PTR record. The appliance remains identified by its IP address.'
+            >
+              <button
+                type='button'
+                aria-label='Hostname unavailable through reverse DNS (PTR) lookup'
+                className='inline-flex size-6 shrink-0 items-center justify-center rounded-sm text-amber-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:text-amber-400'
+              >
+                <AlertCircle className='size-4' aria-hidden='true' />
+              </button>
+            </TooltipOne>
+          )}
+        </CardTitle>
       </CardHeader>
 
       <CardContent>
