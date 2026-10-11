@@ -347,7 +347,7 @@ export default function ProxyCard({
           Dns Name: {proxy.hostinfo.dnsname}
         </p>
         <p className='text-muted-foreground'>
-          Dns IP: {proxy.hostinfo.dnsip}
+          Configured PTR DNS IPs: {proxy.hostinfo.dnsip}
         </p>
         <div className='flex justify-between items-end'>
           <TooltipOne

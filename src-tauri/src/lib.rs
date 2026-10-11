@@ -85,6 +85,7 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 mod utils;
 mod proxy_transport;
+mod proxy_network;
 mod credentials;
 use credentials::{read_management_credentials, save_management_credentials, delete_management_credentials};
 use proxy_transport::clear_management_sessions;
@@ -101,8 +102,7 @@ use crate::traffic_stream::{get_traffic_access_logs, start_traffic_stream, stop_
 use regex::Regex;
 use serde::Serialize;
 use std::{fs::{self, OpenOptions}, io::Write, path::{ PathBuf}, time::Duration,  collections::{HashSet }};
-use chrono::Utc;
-use tokio::process::Command;
+use proxy_network::TraceLog;
 use crate::utils::{append_json_for_blocks, cap_str, get_regex};
 use tokio_util::sync::CancellationToken;
 
@@ -259,143 +259,9 @@ async fn open_proxy(
   Ok(())
 }
 
-#[derive(Serialize)]
-struct TraceLog {
-    pinglog: String,
-    hostname: String,
-    nslookup: String,
-    active: bool,
-    last_check: String,
-    hostinfo: HostInfo,
-    registered_address: String,
-    primary_address: String,
-}
-
-#[derive(Serialize)]
-struct HostInfo {
-    hostname: String,
-    ip: String,
-    dnsname: String,
-    dnsip: String,
-}
-
-fn get_host_info(nslookup: &str) -> Option<HostInfo> {
-    let regexnslookup = Regex::new(
-    r"Server:\s*(?P<server>\S+)\r?\nAddress?:\s*(?P<server_ip>\S+)\r?\n\r?\nName:\s*(?P<host>\S+)\r?\nAddress(?:es)?:\s*(?P<host_ip>(?:\S+(?:\r?\n\s+\S+)*)?)"
-    ).unwrap();
- 
-    let results = match regexnslookup.captures(nslookup) {
-        Some(caps) => {
-            let dns   = caps.name("server").map(|m| m.as_str()).unwrap_or("unkown");
-            let dns_ip = caps.name("server_ip").map(|m| m.as_str()).unwrap_or("unkown");
-            let host     = caps.name("host").map(|m| m.as_str()).unwrap_or("unkown");
-            let host_ip  = caps.name("host_ip").map(|m| m.as_str()).unwrap_or("unknown");
-            HostInfo {
-                hostname: host.to_string(),
-                ip: host_ip.split_whitespace().collect::<Vec<_>>().join(" "),
-                dnsname: dns.to_string(),
-                dnsip: dns_ip.to_string(),
-            }
-        }
-        None => HostInfo { hostname: "unknown".to_string(), ip: "unknown".to_string(), dnsname: "unknown".to_string(), dnsip: "unknown".to_string() }
-    };
-
-    return Some(results);
-}
-
-fn is_single_ip(value: &str) -> bool {
-    let mut addresses = value.split_whitespace();
-    matches!((addresses.next(), addresses.next()), (Some(address), None) if address.parse::<std::net::IpAddr>().is_ok())
-}
-
-fn resolved_ip_from_ping(pinglog: &str) -> Option<String> {
-    let address_pattern = Regex::new(r"\[([^\]]+)\]").unwrap();
-    let resolved_ip = address_pattern
-        .captures_iter(pinglog)
-        .filter_map(|captures| captures.get(1).map(|capture| capture.as_str()))
-        .find(|address| address.parse::<std::net::IpAddr>().is_ok())
-        .map(str::to_string);
-    resolved_ip
-}
-
-
-
 #[tauri::command]
 async fn getproxystatus(hostname: &str) -> Result<TraceLog, String> {
-    // Ejecuta y espera ambos procesos
-    println!("pinging {}", hostname);
-    let outputping = Command::new("ping.exe")
-        .args(&["-n", "4", hostname])
-        .output()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    let outputhostname = Command::new("nslookup.exe")
-        .arg(hostname)
-        .output()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    // Parseos
-    let stdoutping = String::from_utf8_lossy(&outputping.stdout);
-    let stdoutnslookup = String::from_utf8_lossy(&outputhostname.stdout);
-
-    let packetloss = Regex::new("100% loss").unwrap();
-    let timeoutregex = Regex::new("Request timed out.").unwrap();
-    let unreachable = Regex::new("unreachable.").unwrap();
-    let notfound = Regex::new("Ping request could not find host").unwrap();
-
-    let active = !(packetloss.is_match(&stdoutping) || timeoutregex.is_match(&stdoutping) || unreachable.is_match(&stdoutping) || notfound.is_match(&stdoutping));
-    let requested_is_ip = hostname.parse::<std::net::IpAddr>().is_ok();
-    let mut hostinfo = get_host_info(&stdoutnslookup).unwrap_or_else(|| HostInfo {
-        hostname: "unknown".to_string(),
-        ip: "unknown".to_string(),
-        dnsname: "unknown".to_string(),
-        dnsip: "unknown".to_string(),
-    });
-
-    let has_resolved_hostname = !matches!(
-        hostinfo.hostname.to_ascii_lowercase().as_str(),
-        "unknown" | "unkown"
-    );
-    if !has_resolved_hostname && !requested_is_ip {
-        hostinfo.hostname = hostname.to_string();
-    }
-    if matches!(hostinfo.ip.to_ascii_lowercase().as_str(), "unknown" | "unkown") {
-        if requested_is_ip {
-            hostinfo.ip = hostname.to_string();
-        } else if let Some(resolved_ip) = resolved_ip_from_ping(&stdoutping) {
-            hostinfo.ip = resolved_ip;
-        }
-    }
-
-    let primary_address = if requested_is_ip {
-        hostname.to_string()
-    } else if active && is_single_ip(&hostinfo.ip) {
-        hostinfo.ip.clone()
-    } else {
-        hostname.to_string()
-    };
-    let display_hostname = if has_resolved_hostname {
-        hostinfo.hostname.split('.').next().unwrap_or(hostname).to_string()
-    } else {
-        hostname.to_string()
-    };
-
-    println!("hostname?: {}", display_hostname);
-    
-    Ok( 
-        TraceLog {
-            pinglog: stdoutping.to_string(),
-            hostname: display_hostname,
-            nslookup: stdoutnslookup.to_string(),
-            active,
-            last_check: Utc::now().to_rfc3339(),
-            hostinfo,
-            registered_address: hostname.to_string(),
-            primary_address,
-        } 
-    )
+    proxy_network::check_proxy(hostname).await
 }
 
 fn check_cache_dir(app: &AppHandle) -> std::io::Result<PathBuf> {

@@ -28,9 +28,9 @@ export const documentationTopics: Record<DocumentationSlug, Topic> = {
         id: 'inventory',
         title: 'Register and recheck',
         paragraphs: [
-          'Add an appliance by hostname or IP. The inventory prevents duplicate registrations. Rust runs ping.exe -n 4 and nslookup.exe; this check is reachability and DNS discovery, not an HTTP login check.',
+          'Add an appliance by hostname or IP. The inventory prevents duplicate registrations. Rust sends four native ICMP probes with surge-ping and resolves hostnames through Tokio’s operating-system resolver. PTR queries use Hickory with the system DNS configuration. Windows falls back to IP Helper ICMP when raw socket access is denied. Any echo reply confirms reachability; this check does not verify HTTP login.',
           'A failed check changes reachability without replacing known identity with unknown. A registered hostname survives failure. Once a successful check discovers a valid IP, that IP becomes the primary address for later checks. A supplied IP remains preserved.',
-          'An IP-identified appliance without a known hostname shows an amber alert beside its name. Hover or focus it for the reverse DNS (PTR) lookup explanation. This indicates an unavailable hostname, not proof that a PTR record is missing: DNS connectivity or response parsing may also prevent discovery. The IP remains usable; the alert disappears when a hostname becomes available.',
+          'An IP-identified appliance without a known hostname shows an amber alert beside its name. Hover or focus it for the reverse DNS (PTR) lookup explanation. This indicates an unavailable hostname, not proof that a PTR record is missing: DNS connectivity, resolver configuration or a timeout may also prevent discovery. The IP remains usable; the alert disappears when a hostname becomes available.',
         ],
       },
       {
