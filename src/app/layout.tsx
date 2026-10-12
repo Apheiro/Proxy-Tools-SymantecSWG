@@ -21,7 +21,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang='en' suppressHydrationWarning>
-      <body>
+      <body className='bg-red h-dvh overflow-hidden'>
         <CredentialProvider>
           <DayjsProvider>
             <ThemeProvider
@@ -30,14 +30,11 @@ export default function RootLayout({
               enableSystem
               disableTransitionOnChange
             >
-              <ScrollArea className='h-[100dvh]'>
-                <Navbar />
-
-                {/* <ProxyGliobalDataProvider> */}
+              <Navbar />
+              <ScrollArea className='h-[calc(100dvh-53px)] w-dvw'>
                 <TooltipProvider delayDuration={10}>
                   {children}
                 </TooltipProvider>
-                {/* </ProxyGliobalDataProvider> */}
                 <Toaster position='top-center' />
               </ScrollArea>
             </ThemeProvider>

@@ -23,6 +23,9 @@ function ScrollArea({
         data-slot='scroll-area-viewport'
         className={cn(
           'focus-visible:ring-ring/50 size-full rounded-[inherit] transition-[color,box-shadow] outline-none focus-visible:ring-[3px] focus-visible:outline-1',
+          // Radix usa estilos inline de tabla; el modo vertical debe permitir shrink.
+          orientation === 'vertical' &&
+            '[&>div]:block! [&>div]:w-full [&>div]:min-w-0!',
           // Para scroll horizontal, evitar que el contenido se ajuste
           orientation === 'horizontal' &&
             'overflow-x-auto overflow-y-hidden',

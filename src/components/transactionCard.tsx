@@ -51,7 +51,7 @@ function TransactionCard({
 }) {
   return (
     <Card
-      className='shadow-sm p-2 gap-0 max-w-[1200px] w-full'
+      className='p-2 gap-0 max-w-[1200px] w-full'
       id={log.transaction.id}
     >
       <CardHeader className='p-1'>
