@@ -12,13 +12,9 @@ import type { Dispatch, SetStateAction } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
+import { DateTimePicker } from '@/components/ui/date-time-picker';
+import { dateTimeToISO, isoToDateTime } from '@/lib/dateTime';
+import { SelectField, SelectOption } from '@/components/ui/select';
 
 type SearchBy = 'url' | 'transaction' | 'user' | 'ip';
 type QuickRange = '15m' | '1h' | '4h' | '24h';
@@ -159,25 +155,19 @@ export default function FilterBar({
             value={searchFilter}
           />
         </div>
-        <Select
+        <SelectField
+          className='w-full lg:w-48'
+          aria-label='Search field'
           value={searchBy}
           onValueChange={(value) => setSearchBy(value as SearchBy)}
         >
-          <SelectTrigger
-            className='w-full lg:w-48'
-            aria-label='Search field'
-          >
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value='url'>Destination URL</SelectItem>
-            <SelectItem value='transaction'>
-              Transaction ID
-            </SelectItem>
-            <SelectItem value='user'>User</SelectItem>
-            <SelectItem value='ip'>Client IP</SelectItem>
-          </SelectContent>
-        </Select>
+          <SelectOption value='url'>Destination URL</SelectOption>
+          <SelectOption value='transaction'>
+            Transaction ID
+          </SelectOption>
+          <SelectOption value='user'>User</SelectOption>
+          <SelectOption value='ip'>Client IP</SelectOption>
+        </SelectField>
         <Button
           type='button'
           variant={showAdvanced ? 'secondary' : 'outline'}
@@ -331,22 +321,20 @@ export default function FilterBar({
               </label>
 
               <div className='grid gap-3 sm:grid-cols-2'>
-                <Input
+                <DateTimePicker
                   label='From'
-                  type='datetime-local'
-                  value={start}
-                  onChange={(event) => {
-                    setStart(event.target.value);
+                  value={dateTimeToISO(start)}
+                  onChange={(value) => {
+                    setStart(isoToDateTime(value));
                     setSelectedQuickRange(null);
                   }}
                   className='w-full'
                 />
-                <Input
+                <DateTimePicker
                   label='To'
-                  type='datetime-local'
-                  value={end}
-                  onChange={(event) => {
-                    setEnd(event.target.value);
+                  value={dateTimeToISO(end)}
+                  onChange={(value) => {
+                    setEnd(isoToDateTime(value));
                     setSelectedQuickRange(null);
                   }}
                   className='w-full'

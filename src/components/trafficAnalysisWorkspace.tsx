@@ -28,6 +28,8 @@ import BackgroundRefresh from '@/components/backgroundRefresh';
 import TrafficTimeline from '@/components/trafficTimeline';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { DateTimePicker } from '@/components/ui/date-time-picker';
+import { dateTimeToISO, isoToDateTime } from '@/lib/dateTime';
 import {
   Card,
   CardContent,
@@ -35,6 +37,7 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { SelectField, SelectOption } from '@/components/ui/select';
 import { useCredentialRevision } from '@/lib/credentialStore';
 import getCredentials from '@/lib/getCredentials';
 import { useScrapedData } from '@/lib/scrapingCache';
@@ -61,7 +64,7 @@ import {
 import useDataSourceMode from '@/lib/useDataSourceMode';
 import useTrafficCapture from '@/lib/useTrafficCapture';
 
-const SELECT =
+const INPUT =
   'h-9 min-w-0 rounded-md border bg-background px-2 text-sm';
 const TABS = [
   'Overview',
@@ -80,6 +83,9 @@ export default function TrafficAnalysisWorkspace({
   const capture = useTrafficCapture();
   const workersId = useId();
   const accessLogId = useId();
+  const timeZoneId = useId();
+  const rangeControlsId = useId();
+  const filterControlsId = useId();
   const { mode: sourceMode, ready } = useDataSourceMode();
   const [mode, setMode] = useState<'static' | 'live'>('static');
   const [tab, setTab] = useState<(typeof TABS)[number]>('Overview');
@@ -91,7 +97,7 @@ export default function TrafficAnalysisWorkspace({
   const [zone, setZone] = useState('UTC');
   const [zones, setZones] = useState(['UTC']);
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [controlsOpen, setControlsOpen] = useState(false);
+  const [rangeOpen, setRangeOpen] = useState(false);
   const [filters, setFilters] = useState<CaptureFilters>(
     emptyCaptureFilters,
   );
@@ -475,7 +481,7 @@ export default function TrafficAnalysisWorkspace({
             ? 0.96
             : 1,
       }}
-      className='mx-auto flex h-dvh max-w-[1600px] flex-col gap-4 overflow-hidden px-4 py-5 md:px-7 transition-opacity duration-500'
+      className='mx-auto flex h-[calc(100dvh-53px)] max-w-[1600px] flex-col gap-4 overflow-hidden px-4 py-5 md:px-7 transition-opacity duration-500'
     >
       <BackgroundRefresh
         active={indexBusy || analysisLoading}
@@ -556,194 +562,210 @@ export default function TrafficAnalysisWorkspace({
           </Button>
         </div>
       </header>
-      <section
-        className='flex shrink-0 flex-wrap items-center gap-2 rounded-xl border bg-card p-3'
-        aria-label='Capture source'
-      >
-        {mode === 'static' ? (
-          <>
-            <input
-              ref={fileInput}
-              type='file'
-              className='hidden'
-              accept='.log,.txt,.accesslog'
-              multiple
-              onChange={(event) => {
-                const files = Array.from(event.target.files ?? []);
-                if (files.length)
-                  void capture.loadFiles(files, workers);
-                event.target.value = '';
-              }}
-            />
-            <Button
-              size='sm'
-              disabled={capture.busy}
-              onClick={() => fileInput.current?.click()}
-            >
-              Upload logs
-            </Button>
-            <Button
-              size='sm'
-              variant='outline'
-              disabled={capture.busy}
-              onClick={() =>
-                void invoke<string>('get_mock_access_log')
-                  .then((content) =>
-                    capture.loadFile(
-                      new File([content], 'sample-access-log.log'),
-                      workers,
-                    ),
-                  )
-                  .catch((error) => toast.error(String(error)))
-              }
-            >
-              Load sample
-            </Button>
-            <Button
-              size='sm'
-              variant='outline'
-              disabled={capture.busy}
-              onClick={() =>
-                void invoke<string>('get_mock_access_log', {
-                  chart: true,
-                })
-                  .then((content) =>
-                    capture.loadFile(
-                      new File([content], 'chart-sample.log'),
-                      workers,
-                    ),
-                  )
-                  .catch((error) => toast.error(String(error)))
-              }
-            >
-              Chart sample
-            </Button>
-            <select
-              className={`${SELECT} max-w-80`}
-              value=''
-              disabled={capture.busy || !capture.archives.length}
-              aria-label='Load saved capture'
-              onChange={(event) =>
-                void capture.loadSaved(event.target.value)
-              }
-            >
-              <option value=''>
-                Load saved capture ({capture.archives.length})
-              </option>
-              {capture.archives.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.source} · {item.records.toLocaleString()} rows
-                  · {new Date(item.savedAt).toLocaleString()}
-                </option>
-              ))}
-            </select>
-            <label
-              htmlFor={workersId}
-              className='ml-auto text-xs text-muted-foreground'
-            >
-              Processing workers
+      <div className='grid shrink-0 gap-3 lg:grid-cols-[minmax(0,1fr)_auto]'>
+        <Card
+          className='shrink-0 flex-row flex-wrap items-center gap-2 p-3'
+          role='region'
+          aria-label='Capture source'
+        >
+          {mode === 'static' ? (
+            <>
+              <input
+                ref={fileInput}
+                type='file'
+                className='hidden'
+                accept='.log,.txt,.accesslog'
+                multiple
+                onChange={(event) => {
+                  const files = Array.from(event.target.files ?? []);
+                  if (files.length)
+                    void capture.loadFiles(files, workers);
+                  event.target.value = '';
+                }}
+              />
+              <Button
+                size='sm'
+                disabled={capture.busy}
+                onClick={() => fileInput.current?.click()}
+              >
+                Upload logs
+              </Button>
+              <Button
+                size='sm'
+                variant='outline'
+                disabled={capture.busy}
+                onClick={() =>
+                  void invoke<string>('get_mock_access_log')
+                    .then((content) =>
+                      capture.loadFile(
+                        new File([content], 'sample-access-log.log'),
+                        workers,
+                      ),
+                    )
+                    .catch((error) => toast.error(String(error)))
+                }
+              >
+                Explore demo data
+              </Button>
+              <SelectField
+                className='max-w-80'
+                value=''
+                disabled={capture.busy || !capture.archives.length}
+                aria-label='Load saved capture'
+                onValueChange={(selectedValue) =>
+                  void capture.loadSaved(selectedValue)
+                }
+              >
+                <SelectOption value=''>
+                  Load saved capture ({capture.archives.length})
+                </SelectOption>
+                {capture.archives.map((item) => (
+                  <SelectOption key={item.id} value={item.id}>
+                    {item.source} · {item.records.toLocaleString()}{' '}
+                    rows · {new Date(item.savedAt).toLocaleString()}
+                  </SelectOption>
+                ))}
+              </SelectField>
+              <label
+                htmlFor={workersId}
+                className='ml-auto text-xs text-muted-foreground'
+              >
+                Processing workers
+              </label>
+              <SelectField
+                id={workersId}
+                value={workers}
+                disabled={capture.busy}
+                onValueChange={(selectedValue) => {
+                  const value = Number(selectedValue);
+                  setWorkers(value);
+                  try {
+                    localStorage.setItem(
+                      'traffic-analysis-workers',
+                      String(value),
+                    );
+                  } catch {}
+                }}
+              >
+                <SelectOption value={0}>
+                  Auto ({capture.config?.recommendedWorkers ?? '…'})
+                </SelectOption>
+                {Array.from(
+                  { length: capture.config?.maxWorkers ?? 1 },
+                  (_, index) => index + 1,
+                ).map((count) => (
+                  <SelectOption key={count} value={count}>
+                    {count}
+                  </SelectOption>
+                ))}
+              </SelectField>
+            </>
+          ) : (
+            <>
+              <Badge variant='outline'>
+                {sourceMode === 'mock' ? 'Mock HTTP' : 'Live proxy'}
+              </Badge>
+              <label htmlFor={accessLogId} className='text-sm'>
+                Access log
+              </label>
+              <SelectField
+                id={accessLogId}
+                value={selectedLog}
+                disabled={indexKey !== key}
+                onValueChange={(selectedValue) =>
+                  setSelectedLog(selectedValue)
+                }
+              >
+                {!logs.length && (
+                  <SelectOption value=''>
+                    {indexBusy ? 'Loading…' : 'No access logs'}
+                  </SelectOption>
+                )}
+                {logs.map((log) => (
+                  <SelectOption key={log.name} value={log.name}>
+                    {log.name}
+                  </SelectOption>
+                ))}
+              </SelectField>
+              <Button
+                size='sm'
+                variant='outline'
+                disabled={indexBusy || stopping}
+                onClick={() => setIndexVersion((value) => value + 1)}
+              >
+                Refresh logs
+              </Button>
+              <Button
+                size='sm'
+                variant='outline'
+                disabled={
+                  !selectedLog ||
+                  indexBusy ||
+                  stopping ||
+                  indexKey !== key
+                }
+                onClick={() => setStreamVersion((value) => value + 1)}
+              >
+                {active ? 'Restart' : 'Start'}
+              </Button>
+              <Button
+                size='sm'
+                disabled={!active || stopping || !stream?.captureId}
+                onClick={() => void stop()}
+              >
+                {stopping ? 'Stopping…' : 'Stop'}
+              </Button>
+              <Badge
+                variant={
+                  stream?.status === 'error'
+                    ? 'destructive'
+                    : 'outline'
+                }
+              >
+                {stream?.status ?? 'Idle'}
+              </Badge>
+              <span className='text-xs text-muted-foreground'>
+                {stream?.message}
+              </span>
+              {stream?.url && (
+                <p className='w-full break-all font-mono text-xs text-muted-foreground'>
+                  {stream.url}
+                </p>
+              )}
+            </>
+          )}
+        </Card>
+        <Card className='gap-2 py-3'>
+          <CardHeader className='px-3'>
+            <CardTitle className='text-sm'>UTC Time Zone</CardTitle>
+          </CardHeader>
+          <CardContent className='px-3'>
+            <label htmlFor={timeZoneId} className='sr-only'>
+              Display time zone
             </label>
-            <select
-              id={workersId}
-              className={SELECT}
-              value={workers}
-              disabled={capture.busy}
-              onChange={(event) => {
-                const value = Number(event.target.value);
-                setWorkers(value);
+            <SelectField
+              id={timeZoneId}
+              className='w-full lg:w-64'
+              value={zone}
+              onValueChange={(selectedValue) => {
+                setZone(selectedValue);
                 try {
                   localStorage.setItem(
-                    'traffic-analysis-workers',
-                    String(value),
+                    'traffic-analysis-timezone',
+                    selectedValue,
                   );
                 } catch {}
               }}
             >
-              <option value={0}>
-                Auto ({capture.config?.recommendedWorkers ?? '…'})
-              </option>
-              {Array.from(
-                { length: capture.config?.maxWorkers ?? 1 },
-                (_, index) => index + 1,
-              ).map((count) => (
-                <option key={count} value={count}>
-                  {count}
-                </option>
+              {zones.map((name) => (
+                <SelectOption key={name} value={name}>
+                  {name.replaceAll('_', ' ')}
+                </SelectOption>
               ))}
-            </select>
-          </>
-        ) : (
-          <>
-            <Badge variant='outline'>
-              {sourceMode === 'mock' ? 'Mock HTTP' : 'Live proxy'}
-            </Badge>
-            <label htmlFor={accessLogId} className='text-sm'>
-              Access log
-            </label>
-            <select
-              id={accessLogId}
-              className={SELECT}
-              value={selectedLog}
-              disabled={indexKey !== key}
-              onChange={(event) => setSelectedLog(event.target.value)}
-            >
-              {!logs.length && (
-                <option value=''>
-                  {indexBusy ? 'Loading…' : 'No access logs'}
-                </option>
-              )}
-              {logs.map((log) => (
-                <option key={log.name} value={log.name}>
-                  {log.name}
-                </option>
-              ))}
-            </select>
-            <Button
-              size='sm'
-              variant='outline'
-              disabled={indexBusy || stopping}
-              onClick={() => setIndexVersion((value) => value + 1)}
-            >
-              Refresh logs
-            </Button>
-            <Button
-              size='sm'
-              variant='outline'
-              disabled={
-                !selectedLog ||
-                indexBusy ||
-                stopping ||
-                indexKey !== key
-              }
-              onClick={() => setStreamVersion((value) => value + 1)}
-            >
-              {active ? 'Restart' : 'Start'}
-            </Button>
-            <Button
-              size='sm'
-              disabled={!active || stopping || !stream?.captureId}
-              onClick={() => void stop()}
-            >
-              {stopping ? 'Stopping…' : 'Stop'}
-            </Button>
-            <Badge
-              variant={
-                stream?.status === 'error' ? 'destructive' : 'outline'
-              }
-            >
-              {stream?.status ?? 'Idle'}
-            </Badge>
-            <span className='text-xs text-muted-foreground'>
-              {stream?.message}
-            </span>
-            {stream?.url && (
-              <p className='w-full break-all font-mono text-xs text-muted-foreground'>
-                {stream.url}
-              </p>
-            )}
-          </>
-        )}
-      </section>
+            </SelectField>
+          </CardContent>
+        </Card>
+      </div>
       {mode === 'static' && capture.progress && (
         <div className='shrink-0 space-y-1 text-xs'>
           <div className='flex justify-between gap-2'>
@@ -790,7 +812,7 @@ export default function TrafficAnalysisWorkspace({
                 <Activity className='mx-auto mb-3 size-8 opacity-40' />
                 {mode === 'live'
                   ? stream?.message
-                  : 'Upload a log, load a sample, or open a saved capture.'}
+                  : 'Upload a log, explore demo data, or open a saved capture.'}
               </div>
             </div>
           ) : (
@@ -823,50 +845,6 @@ export default function TrafficAnalysisWorkspace({
                           : 'Refreshing analysis…'}
                       </Badge>
                     )}
-                    {controlsOpen && (
-                      <select
-                        className={SELECT}
-                        value={metric}
-                        aria-label='Chart and ranking metric'
-                        onChange={(event) =>
-                          setMetric(
-                            event.target.value as
-                              | 'requests'
-                              | 'bytes',
-                          )
-                        }
-                      >
-                        <option value='requests'>Requests</option>
-                        <option
-                          value='bytes'
-                          disabled={!bytesAvailable}
-                        >
-                          Bytes
-                        </option>
-                      </select>
-                    )}
-                    <Button
-                      size='sm'
-                      variant='outline'
-                      onClick={() =>
-                        setControlsOpen((value) => !value)
-                      }
-                      aria-expanded={controlsOpen}
-                    >
-                      Range & filters
-                      {Object.values(filters).filter(Boolean).length >
-                        0 && (
-                        <Badge variant='secondary'>
-                          {
-                            Object.values(filters).filter(Boolean)
-                              .length
-                          }
-                        </Badge>
-                      )}
-                      <ChevronDown
-                        className={`size-4 transition-transform ${controlsOpen ? 'rotate-180' : ''}`}
-                      />
-                    </Button>
                   </div>
                 </CardHeader>
                 <CardContent className='space-y-2 px-4'>
@@ -878,32 +856,55 @@ export default function TrafficAnalysisWorkspace({
                     timeZone={zone}
                     metric={metric}
                   />
-                  {controlsOpen && (
-                    <div className='flex flex-wrap items-end gap-2'>
+                  {rangeOpen && (
+                    <div
+                      id={rangeControlsId}
+                      className='flex flex-wrap items-end gap-2'
+                    >
                       <label className='space-y-1 text-xs text-muted-foreground'>
-                        From (UTC)
-                        <input
-                          type='datetime-local'
-                          step='1'
-                          className={`${SELECT} block`}
-                          value={draftStart}
-                          onChange={(event) =>
-                            setDraftStart(event.target.value)
+                        Chart and ranking metric
+                        <SelectField
+                          value={metric}
+                          aria-label='Chart and ranking metric'
+                          onValueChange={(selectedValue) =>
+                            setMetric(
+                              selectedValue as 'requests' | 'bytes',
+                            )
                           }
-                        />
+                        >
+                          <SelectOption value='requests'>
+                            Requests
+                          </SelectOption>
+                          <SelectOption
+                            value='bytes'
+                            disabled={!bytesAvailable}
+                          >
+                            Bytes
+                          </SelectOption>
+                        </SelectField>
                       </label>
-                      <label className='space-y-1 text-xs text-muted-foreground'>
-                        Through (UTC, inclusive)
-                        <input
-                          type='datetime-local'
-                          step='1'
-                          className={`${SELECT} block`}
-                          value={draftEnd}
-                          onChange={(event) =>
-                            setDraftEnd(event.target.value)
-                          }
-                        />
-                      </label>
+                      <DateTimePicker
+                        label='From (UTC)'
+                        timeZone='UTC'
+                        precision='second'
+                        value={dateTimeToISO(draftStart, 'UTC')}
+                        onChange={(value) =>
+                          setDraftStart(
+                            isoToDateTime(value, 'UTC', 'second'),
+                          )
+                        }
+                      />
+                      <DateTimePicker
+                        label='Through (UTC, inclusive)'
+                        timeZone='UTC'
+                        precision='second'
+                        value={dateTimeToISO(draftEnd, 'UTC')}
+                        onChange={(value) =>
+                          setDraftEnd(
+                            isoToDateTime(value, 'UTC', 'second'),
+                          )
+                        }
+                      />
                       <Button
                         size='sm'
                         variant='outline'
@@ -932,28 +933,6 @@ export default function TrafficAnalysisWorkspace({
                               : 'Last 24h'}
                         </Button>
                       ))}
-                      <label className='ml-auto space-y-1 text-xs text-muted-foreground'>
-                        Display time zone
-                        <select
-                          className={`${SELECT} block max-w-64`}
-                          value={zone}
-                          onChange={(event) => {
-                            setZone(event.target.value);
-                            try {
-                              localStorage.setItem(
-                                'traffic-analysis-timezone',
-                                event.target.value,
-                              );
-                            } catch {}
-                          }}
-                        >
-                          {zones.map((name) => (
-                            <option key={name} value={name}>
-                              {name.replaceAll('_', ' ')}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
                     </div>
                   )}
                   <p className='text-xs text-muted-foreground'>
@@ -967,94 +946,121 @@ export default function TrafficAnalysisWorkspace({
                     · Adaptive density cells. Records without a valid
                     timestamp appear only in unbounded time ranges.
                   </p>
-                </CardContent>
-              </Card>
-              {controlsOpen && (
-                <Card className='gap-2 py-3'>
-                  <CardHeader className='flex-row items-center justify-between px-4'>
-                    <button
-                      type='button'
-                      className='flex items-center gap-2 text-sm font-medium'
-                      onClick={() =>
-                        setFiltersOpen((value) => !value)
-                      }
-                      aria-expanded={filtersOpen}
-                    >
-                      <SlidersHorizontal className='size-4' />
-                      Filters{' '}
-                      {Object.values(filters).filter(Boolean).length
-                        ? `(${Object.values(filters).filter(Boolean).length})`
-                        : ''}
-                    </button>
+                  <div className='flex justify-end'>
                     <Button
                       size='sm'
-                      variant='ghost'
-                      onClick={() => setFilters(emptyCaptureFilters)}
+                      variant='outline'
+                      className='cursor-pointer'
+                      onClick={() => setRangeOpen((value) => !value)}
+                      aria-expanded={rangeOpen}
+                      aria-controls={rangeControlsId}
                     >
-                      Clear filters
+                      Range
+                      <ChevronDown
+                        className={`size-4 transition-transform ${rangeOpen ? 'rotate-180' : ''}`}
+                      />
                     </Button>
-                  </CardHeader>
-                  {filtersOpen && (
-                    <CardContent className='grid gap-2 px-4 sm:grid-cols-3 lg:grid-cols-5'>
-                      {(
-                        [
-                          'search',
-                          'client',
-                          'user',
-                          'host',
-                          'threat',
-                        ] as const
-                      ).map((name) => (
-                        <label
-                          key={name}
-                          className='space-y-1 text-xs capitalize text-muted-foreground'
+                  </div>
+                </CardContent>
+              </Card>
+              <Card className='gap-0 py-0'>
+                <CardHeader className='relative flex flex-row items-center justify-between rounded-xl px-4 py-3 cursor-pointer'>
+                  <button
+                    type='button'
+                    className='absolute inset-0 cursor-pointer rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+                    onClick={() => setFiltersOpen((value) => !value)}
+                    aria-label={
+                      filtersOpen
+                        ? 'Collapse filters'
+                        : 'Expand filters'
+                    }
+                    aria-expanded={filtersOpen}
+                    aria-controls={filterControlsId}
+                  />
+                  <CardTitle className='pointer-events-none relative flex items-center gap-2 text-sm'>
+                    <SlidersHorizontal className='size-4' />
+                    Filters{' '}
+                    {Object.values(filters).filter(Boolean).length
+                      ? `(${Object.values(filters).filter(Boolean).length})`
+                      : ''}
+                    <ChevronDown
+                      className={`size-4 transition-transform ${filtersOpen ? 'rotate-180' : ''}`}
+                    />
+                  </CardTitle>
+                  <Button
+                    size='sm'
+                    variant='ghost'
+                    className='relative z-10 cursor-pointer'
+                    onClick={() => setFilters(emptyCaptureFilters)}
+                  >
+                    Clear filters
+                  </Button>
+                </CardHeader>
+                {filtersOpen && (
+                  <CardContent
+                    id={filterControlsId}
+                    className='grid gap-2 px-4 pb-3 sm:grid-cols-3 lg:grid-cols-5'
+                  >
+                    {(
+                      [
+                        'search',
+                        'client',
+                        'user',
+                        'host',
+                        'threat',
+                      ] as const
+                    ).map((name) => (
+                      <label
+                        key={name}
+                        className='space-y-1 text-xs capitalize text-muted-foreground'
+                      >
+                        {name === 'host'
+                          ? 'Destination / host'
+                          : name}
+                        <input
+                          className={`${INPUT} block w-full`}
+                          value={filters[name]}
+                          onChange={(event) =>
+                            filter(name, event.target.value)
+                          }
+                          placeholder={`Find ${name}…`}
+                        />
+                      </label>
+                    ))}
+                    {(
+                      [
+                        ['category', 'cs-categories'],
+                        ['action', 's-action'],
+                        ['status', 'sc-status'],
+                        ['method', 'cs-method'],
+                      ] as const
+                    ).map(([name, field]) => (
+                      <label
+                        key={name}
+                        className='space-y-1 text-xs capitalize text-muted-foreground'
+                      >
+                        {name}
+                        <SelectField
+                          className='w-full'
+                          value={filters[name]}
+                          onValueChange={(selectedValue) =>
+                            filter(name, selectedValue)
+                          }
                         >
-                          {name === 'host'
-                            ? 'Destination / host'
-                            : name}
-                          <input
-                            className={`${SELECT} block w-full`}
-                            value={filters[name]}
-                            onChange={(event) =>
-                              filter(name, event.target.value)
-                            }
-                            placeholder={`Find ${name}…`}
-                          />
-                        </label>
-                      ))}
-                      {(
-                        [
-                          ['category', 'cs-categories'],
-                          ['action', 's-action'],
-                          ['status', 'sc-status'],
-                          ['method', 'cs-method'],
-                        ] as const
-                      ).map(([name, field]) => (
-                        <label
-                          key={name}
-                          className='space-y-1 text-xs capitalize text-muted-foreground'
-                        >
-                          {name}
-                          <select
-                            className={`${SELECT} block w-full`}
-                            value={filters[name]}
-                            onChange={(event) =>
-                              filter(name, event.target.value)
-                            }
-                          >
-                            <option value=''>All {name}</option>
-                            {(options[field] ?? []).map((value) => (
-                              <option key={value} value={value}>
-                                {value}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                      ))}
-                    </CardContent>
-                  )}
-                </Card>
-              )}
+                          <SelectOption value=''>
+                            All {name}
+                          </SelectOption>
+                          {(options[field] ?? []).map((value) => (
+                            <SelectOption key={value} value={value}>
+                              {value}
+                            </SelectOption>
+                          ))}
+                        </SelectField>
+                      </label>
+                    ))}
+                  </CardContent>
+                )}
+              </Card>
               <div className='flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground'>
                 <span>
                   {capture.dataset?.source} ·{' '}
@@ -1160,19 +1166,21 @@ export default function TrafficAnalysisWorkspace({
                         <div className='flex justify-end gap-2'>
                           <label className='flex items-center gap-2 text-sm'>
                             Ranking size
-                            <select
-                              className={SELECT}
+                            <SelectField
                               value={limit}
-                              onChange={(event) =>
-                                setLimit(Number(event.target.value))
+                              onValueChange={(selectedValue) =>
+                                setLimit(Number(selectedValue))
                               }
                             >
                               {[10, 20, 30, 50].map((value) => (
-                                <option key={value} value={value}>
+                                <SelectOption
+                                  key={value}
+                                  value={value}
+                                >
                                   Top {value}
-                                </option>
+                                </SelectOption>
                               ))}
-                            </select>
+                            </SelectField>
                           </label>
                         </div>
                         {tab === 'Overview' && (
@@ -1643,7 +1651,7 @@ function Pagination({
           type='number'
           min={1}
           max={result.totalPages}
-          className={`${SELECT} w-20`}
+          className={`${INPUT} w-20`}
           value={pageDraft}
           onChange={(event) => setPageDraft(event.target.value)}
           onKeyDown={(event) => {
@@ -1666,7 +1674,7 @@ function Pagination({
           type='number'
           min={1}
           max={result.totalRecords}
-          className={`${SELECT} w-24`}
+          className={`${INPUT} w-24`}
           value={recordDraft}
           onChange={(event) => setRecordDraft(event.target.value)}
           onKeyDown={(event) => {
@@ -1682,18 +1690,19 @@ function Pagination({
       >
         Locate page
       </Button>
-      <select
+      <SelectField
         aria-label='Records per page'
-        className={SELECT}
         value={pageSize}
-        onChange={(event) => setPageSize(Number(event.target.value))}
+        onValueChange={(selectedValue) =>
+          setPageSize(Number(selectedValue))
+        }
       >
         {[50, 100, 250, 500].map((size) => (
-          <option key={size} value={size}>
+          <SelectOption key={size} value={size}>
             {size} / page
-          </option>
+          </SelectOption>
         ))}
-      </select>
+      </SelectField>
     </div>
   );
 }
