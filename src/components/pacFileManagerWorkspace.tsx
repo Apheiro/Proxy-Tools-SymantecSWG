@@ -33,6 +33,7 @@ import {
 } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { SelectField, SelectOption } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import {
   Dialog,
@@ -1113,21 +1114,22 @@ export default function PacFileManagerWorkspace({
                       </span>
                       <span className='flex items-center gap-2 text-xs font-normal text-muted-foreground'>
                         Order determines priority
-                        <select
+                        <SelectField
                           aria-label='Filter rule group'
-                          className='h-8 rounded-md border bg-background px-2 text-xs text-foreground'
+                          size='sm'
+                          className='px-2 text-xs text-foreground'
                           value={activeGroupFilter}
-                          onChange={(event) =>
-                            setGroupFilter(event.target.value)
+                          onValueChange={(selectedValue) =>
+                            setGroupFilter(selectedValue)
                           }
                         >
-                          <option value='all'>All groups</option>
+                          <SelectOption value='all'>All groups</SelectOption>
                           {groups.map((group) => (
-                            <option key={group.id} value={group.id}>
+                            <SelectOption key={group.id} value={group.id}>
                               {group.name}
-                            </option>
+                            </SelectOption>
                           ))}
-                        </select>
+                        </SelectField>
                       </span>
                     </CardTitle>
                   </CardHeader>
@@ -1286,36 +1288,34 @@ export default function PacFileManagerWorkspace({
                               {editingRule?.id === rule.id && (
                                 <>
                                   <div className='mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4'>
-                                    <select
+                                    <SelectField
                                       aria-label='Rule group'
-                                      className='h-9 rounded-md border bg-background px-3 text-sm'
                                       value={
                                         editingRule.groupId ??
                                         'general'
                                       }
-                                      onChange={(event) =>
+                                      onValueChange={(selectedValue) =>
                                         setEditingRule(
                                           (current) =>
                                             current && {
                                               ...current,
                                               groupId:
-                                                event.target.value,
+                                                selectedValue,
                                             },
                                         )
                                       }
                                     >
                                       {groups.map((group) => (
-                                        <option
+                                        <SelectOption
                                           key={group.id}
                                           value={group.id}
                                         >
                                           {group.name}
-                                        </option>
+                                        </SelectOption>
                                       ))}
-                                    </select>
-                                    <select
+                                    </SelectField>
+                                    <SelectField
                                       aria-label='Match type'
-                                      className='h-9 rounded-md border bg-background px-3 text-sm'
                                       value={
                                         editingRule.condition.kind
                                       }
@@ -1323,54 +1323,53 @@ export default function PacFileManagerWorkspace({
                                         rule.condition.kind ===
                                         'always'
                                       }
-                                      onChange={(event) =>
+                                      onValueChange={(selectedValue) =>
                                         setEditingRule(
                                           (current) =>
                                             current && {
                                               ...current,
                                               condition: {
                                                 ...current.condition,
-                                                kind: event.target
-                                                  .value as PacCondition['kind'],
+                                                kind: selectedValue as PacCondition['kind'],
                                               },
                                             },
                                         )
                                       }
                                     >
-                                      <option value='domain'>
+                                      <SelectOption value='domain'>
                                         Domain
-                                      </option>
-                                      <option value='url'>
+                                      </SelectOption>
+                                      <SelectOption value='url'>
                                         URL pattern
-                                      </option>
-                                      <option value='host'>
+                                      </SelectOption>
+                                      <SelectOption value='host'>
                                         Exact host
-                                      </option>
-                                      <option value='starts-with'>
+                                      </SelectOption>
+                                      <SelectOption value='starts-with'>
                                         Starts with
-                                      </option>
-                                      <option value='ends-with'>
+                                      </SelectOption>
+                                      <SelectOption value='ends-with'>
                                         Ends with
-                                      </option>
-                                      <option value='contains'>
+                                      </SelectOption>
+                                      <SelectOption value='contains'>
                                         Contains
-                                      </option>
-                                      <option value='ip-network'>
+                                      </SelectOption>
+                                      <SelectOption value='ip-network'>
                                         IP address / CIDR range
-                                      </option>
-                                      <option value='expression'>
+                                      </SelectOption>
+                                      <SelectOption value='expression'>
                                         Custom PAC expression
-                                      </option>
-                                      <option value='regex'>
+                                      </SelectOption>
+                                      <SelectOption value='regex'>
                                         Advanced regex
-                                      </option>
+                                      </SelectOption>
                                       {rule.condition.kind ===
                                         'always' && (
-                                        <option value='always'>
+                                        <SelectOption value='always'>
                                           Default
-                                        </option>
+                                        </SelectOption>
                                       )}
-                                    </select>
+                                    </SelectField>
                                     {[
                                       'regex',
                                       'starts-with',
@@ -1379,22 +1378,20 @@ export default function PacFileManagerWorkspace({
                                     ].includes(
                                       editingRule.condition.kind,
                                     ) && (
-                                      <select
+                                      <SelectField
                                         aria-label='Match against'
-                                        className='h-9 rounded-md border bg-background px-3 text-sm'
                                         value={
                                           editingRule.condition
                                             .target ?? 'url'
                                         }
-                                        onChange={(event) =>
+                                        onValueChange={(selectedValue) =>
                                           setEditingRule(
                                             (current) =>
                                               current && {
                                                 ...current,
                                                 condition: {
                                                   ...current.condition,
-                                                  target: event.target
-                                                    .value as
+                                                  target: selectedValue as
                                                     | 'url'
                                                     | 'host',
                                                 },
@@ -1402,13 +1399,13 @@ export default function PacFileManagerWorkspace({
                                           )
                                         }
                                       >
-                                        <option value='url'>
+                                        <SelectOption value='url'>
                                           URL
-                                        </option>
-                                        <option value='host'>
+                                        </SelectOption>
+                                        <SelectOption value='host'>
                                           Host
-                                        </option>
-                                      </select>
+                                        </SelectOption>
+                                      </SelectField>
                                     )}
                                     <Input
                                       aria-label='Rule condition'
@@ -1433,9 +1430,8 @@ export default function PacFileManagerWorkspace({
                                         )
                                       }
                                     />
-                                    <select
+                                    <SelectField
                                       aria-label='Rule destination'
-                                      className='h-9 rounded-md border bg-background px-3 text-sm'
                                       value={
                                         editingRule.destination
                                           .kind === 'direct'
@@ -1443,9 +1439,9 @@ export default function PacFileManagerWorkspace({
                                           : editingRule.destination
                                               .proxyRef
                                       }
-                                      onChange={(event) => {
+                                      onValueChange={(selectedValue) => {
                                         if (
-                                          event.target.value ===
+                                          selectedValue ===
                                           'direct'
                                         )
                                           setEditingRule(
@@ -1461,7 +1457,7 @@ export default function PacFileManagerWorkspace({
                                           const proxy = proxies.find(
                                             (item) =>
                                               proxyIdentity(item) ===
-                                              event.target.value,
+                                              selectedValue,
                                           );
                                           if (proxy)
                                             setEditingRule(
@@ -1504,11 +1500,11 @@ export default function PacFileManagerWorkspace({
                                         }
                                       }}
                                     >
-                                      <option value='direct'>
+                                      <SelectOption value='direct'>
                                         DIRECT
-                                      </option>
+                                      </SelectOption>
                                       {proxies.map((proxy) => (
-                                        <option
+                                        <SelectOption
                                           key={proxyIdentity(proxy)}
                                           value={proxyIdentity(proxy)}
                                         >
@@ -1516,21 +1512,20 @@ export default function PacFileManagerWorkspace({
                                             proxy.hostinfo
                                               ?.hostname ||
                                             proxyIdentity(proxy)}
-                                        </option>
+                                        </SelectOption>
                                       ))}
-                                    </select>
+                                    </SelectField>
                                   </div>
                                   {editingRule.destination.kind ===
                                     'proxy' && (
                                     <div className='mt-2 grid gap-2 sm:grid-cols-[150px_150px]'>
-                                      <select
+                                      <SelectField
                                         aria-label='PAC protocol'
-                                        className='h-9 rounded-md border bg-background px-3 text-sm'
                                         value={
                                           editingRule.destination
                                             .protocol
                                         }
-                                        onChange={(event) =>
+                                        onValueChange={(selectedValue) =>
                                           setEditingRule((current) =>
                                             current?.destination
                                               .kind === 'proxy'
@@ -1538,8 +1533,7 @@ export default function PacFileManagerWorkspace({
                                                   ...current,
                                                   destination: {
                                                     ...current.destination,
-                                                    protocol: event
-                                                      .target.value as
+                                                    protocol: selectedValue as
                                                       | 'PROXY'
                                                       | 'HTTP'
                                                       | 'HTTPS'
@@ -1552,13 +1546,13 @@ export default function PacFileManagerWorkspace({
                                           )
                                         }
                                       >
-                                        <option>PROXY</option>
-                                        <option>HTTP</option>
-                                        <option>HTTPS</option>
-                                        <option>SOCKS</option>
-                                        <option>SOCKS4</option>
-                                        <option>SOCKS5</option>
-                                      </select>
+                                        <SelectOption value='PROXY'>PROXY</SelectOption>
+                                        <SelectOption value='HTTP'>HTTP</SelectOption>
+                                        <SelectOption value='HTTPS'>HTTPS</SelectOption>
+                                        <SelectOption value='SOCKS'>SOCKS</SelectOption>
+                                        <SelectOption value='SOCKS4'>SOCKS4</SelectOption>
+                                        <SelectOption value='SOCKS5'>SOCKS5</SelectOption>
+                                      </SelectField>
                                       <Input
                                         aria-label='Proxy traffic port'
                                         placeholder='Traffic port'
@@ -1620,16 +1614,16 @@ export default function PacFileManagerWorkspace({
                                           key={fallbackIndex}
                                           className='flex flex-wrap items-center gap-2'
                                         >
-                                          <select
+                                          <SelectField
                                             aria-label={`Fallback destination ${fallbackIndex + 1}`}
-                                            className='h-9 min-w-52 rounded-md border bg-background px-3 text-sm'
+                                            className='min-w-52'
                                             value={
                                               destination.kind ===
                                               'direct'
                                                 ? 'direct'
                                                 : destination.proxyRef
                                             }
-                                            onChange={(event) =>
+                                            onValueChange={(selectedValue) =>
                                               setEditingRule(
                                                 (current) => {
                                                   if (!current)
@@ -1638,8 +1632,7 @@ export default function PacFileManagerWorkspace({
                                                     ...current.fallbacks,
                                                   ];
                                                   if (
-                                                    event.target
-                                                      .value ===
+                                                    selectedValue ===
                                                     'direct'
                                                   )
                                                     fallbacks[
@@ -1654,8 +1647,7 @@ export default function PacFileManagerWorkspace({
                                                           proxyIdentity(
                                                             item,
                                                           ) ===
-                                                          event.target
-                                                            .value,
+                                                          selectedValue,
                                                       );
                                                     if (proxy)
                                                       fallbacks[
@@ -1693,11 +1685,11 @@ export default function PacFileManagerWorkspace({
                                               )
                                             }
                                           >
-                                            <option value='direct'>
+                                            <SelectOption value='direct'>
                                               DIRECT
-                                            </option>
+                                            </SelectOption>
                                             {proxies.map((proxy) => (
-                                              <option
+                                              <SelectOption
                                                 key={proxyIdentity(
                                                   proxy,
                                                 )}
@@ -1709,19 +1701,18 @@ export default function PacFileManagerWorkspace({
                                                   proxyIdentity(
                                                     proxy,
                                                   )}
-                                              </option>
+                                              </SelectOption>
                                             ))}
-                                          </select>
+                                          </SelectField>
                                           {destination.kind ===
                                             'proxy' && (
                                             <>
-                                              <select
+                                              <SelectField
                                                 aria-label={`Fallback protocol ${fallbackIndex + 1}`}
-                                                className='h-9 rounded-md border bg-background px-3 text-sm'
                                                 value={
                                                   destination.protocol
                                                 }
-                                                onChange={(event) =>
+                                                onValueChange={(selectedValue) =>
                                                   setEditingRule(
                                                     (current) =>
                                                       current && {
@@ -1739,9 +1730,7 @@ export default function PacFileManagerWorkspace({
                                                                 ? {
                                                                     ...item,
                                                                     protocol:
-                                                                      event
-                                                                        .target
-                                                                        .value as typeof item.protocol,
+                                                                      selectedValue as typeof item.protocol,
                                                                   }
                                                                 : item,
                                                           ),
@@ -1749,17 +1738,17 @@ export default function PacFileManagerWorkspace({
                                                   )
                                                 }
                                               >
-                                                <option>PROXY</option>
-                                                <option>HTTP</option>
-                                                <option>HTTPS</option>
-                                                <option>SOCKS</option>
-                                                <option>
+                                                <SelectOption value='PROXY'>PROXY</SelectOption>
+                                                <SelectOption value='HTTP'>HTTP</SelectOption>
+                                                <SelectOption value='HTTPS'>HTTPS</SelectOption>
+                                                <SelectOption value='SOCKS'>SOCKS</SelectOption>
+                                                <SelectOption value='SOCKS4'>
                                                   SOCKS4
-                                                </option>
-                                                <option>
+                                                </SelectOption>
+                                                <SelectOption value='SOCKS5'>
                                                   SOCKS5
-                                                </option>
-                                              </select>
+                                                </SelectOption>
+                                              </SelectField>
                                               <Input
                                                 aria-label={`Fallback traffic port ${fallbackIndex + 1}`}
                                                 className='w-28'
@@ -1871,32 +1860,30 @@ export default function PacFileManagerWorkspace({
                         <Plus className='size-4' />
                         Add group
                       </Button>
-                      <select
+                      <SelectField
                         aria-label='New rule group'
-                        className='h-9 min-w-40 rounded-md border bg-background px-3 text-sm'
+                        className='min-w-40'
                         value={activeGroupId}
-                        onChange={(event) =>
-                          setNewGroupId(event.target.value)
+                        onValueChange={(selectedValue) =>
+                          setNewGroupId(selectedValue)
                         }
                       >
                         {groups.map((group) => (
-                          <option key={group.id} value={group.id}>
+                          <SelectOption key={group.id} value={group.id}>
                             {group.name}
-                          </option>
+                          </SelectOption>
                         ))}
-                      </select>
+                      </SelectField>
                       </div>
                     </section>
                     <section className='space-y-3 rounded-lg border bg-muted/20 p-4 md:col-span-2 xl:col-span-4'>
                       <div><h3 className='text-sm font-semibold'>Match condition</h3><p className='text-xs text-muted-foreground'>Choose how the request should match this rule.</p></div>
                       <div className='grid gap-3 md:grid-cols-2'>
-                    <select
+                    <SelectField
                       aria-label='New match type'
-                      className='h-9 rounded-md border bg-background px-3 text-sm'
                       value={conditionKind}
-                      onChange={(event) => {
-                        const nextKind = event.target
-                          .value as PacCondition['kind'];
+                      onValueChange={(selectedValue) => {
+                        const nextKind = selectedValue as PacCondition['kind'];
                         setConditionKind(nextKind);
                         if (
                           nextKind === 'always' ||
@@ -1906,48 +1893,47 @@ export default function PacFileManagerWorkspace({
                         setConditionError('');
                       }}
                     >
-                      <option value='domain'>Domain</option>
-                      <option value='url'>URL pattern</option>
-                      <option value='host'>Exact host</option>
-                      <option value='starts-with'>Starts with</option>
-                      <option value='ends-with'>Ends with</option>
-                      <option value='contains'>Contains</option>
-                      <option value='ip-network'>
+                      <SelectOption value='domain'>Domain</SelectOption>
+                      <SelectOption value='url'>URL pattern</SelectOption>
+                      <SelectOption value='host'>Exact host</SelectOption>
+                      <SelectOption value='starts-with'>Starts with</SelectOption>
+                      <SelectOption value='ends-with'>Ends with</SelectOption>
+                      <SelectOption value='contains'>Contains</SelectOption>
+                      <SelectOption value='ip-network'>
                         IP address / CIDR range
-                      </option>
-                      <option value='expression'>
+                      </SelectOption>
+                      <SelectOption value='expression'>
                         Custom PAC expression
-                      </option>
-                      <option value='regex'>Advanced regex</option>
-                      <option value='always'>Default</option>
-                    </select>
+                      </SelectOption>
+                      <SelectOption value='regex'>Advanced regex</SelectOption>
+                      <SelectOption value='always'>Default</SelectOption>
+                    </SelectField>
                     {[
                       'regex',
                       'starts-with',
                       'ends-with',
                       'contains',
                     ].includes(conditionKind) && (
-                      <select
+                      <SelectField
                         aria-label='Match against'
-                        className='h-9 rounded-md border bg-background px-3 text-sm'
                         value={
                           conditionKind === 'regex'
                             ? regexTarget
                             : conditionTarget
                         }
-                        onChange={(event) =>
+                        onValueChange={(selectedValue) =>
                           conditionKind === 'regex'
                             ? setRegexTarget(
-                                event.target.value as 'url' | 'host',
+                                selectedValue as 'url' | 'host',
                               )
                             : setConditionTarget(
-                                event.target.value as 'url' | 'host',
+                                selectedValue as 'url' | 'host',
                               )
                         }
                       >
-                        <option value='url'>URL</option>
-                        <option value='host'>Host</option>
-                      </select>
+                        <SelectOption value='url'>URL</SelectOption>
+                        <SelectOption value='host'>Host</SelectOption>
+                      </SelectField>
                     )}
                     <label className='flex items-center gap-2 text-sm md:col-span-2 xl:col-span-4'>
                       <Switch
@@ -2033,61 +2019,57 @@ export default function PacFileManagerWorkspace({
                     <section className='space-y-3 rounded-lg border bg-muted/20 p-4 md:col-span-2 xl:col-span-4'>
                       <div><h3 className='text-sm font-semibold'>Routing destination</h3><p className='text-xs text-muted-foreground'>Choose DIRECT or a registered proxy and connection protocol.</p></div>
                       <div className='grid gap-3 md:grid-cols-2 xl:grid-cols-4'>
-                    <select
+                    <SelectField
                       aria-label='New destination'
-                      className='h-9 rounded-md border bg-background px-3 text-sm'
                       value={destinationKind}
-                      onChange={(event) =>
+                      onValueChange={(selectedValue) =>
                         setDestinationKind(
-                          event.target.value as 'direct' | 'proxy',
+                          selectedValue as 'direct' | 'proxy',
                         )
                       }
                     >
-                      <option value='direct'>DIRECT</option>
-                      <option value='proxy'>Registered proxy</option>
-                    </select>
+                      <SelectOption value='direct'>DIRECT</SelectOption>
+                      <SelectOption value='proxy'>Registered proxy</SelectOption>
+                    </SelectField>
                     {destinationKind === 'proxy' ? (
-                      <select
+                      <SelectField
                         aria-label='Destination proxy'
-                        className='h-9 rounded-md border bg-background px-3 text-sm'
                         value={proxyRef}
-                        onChange={(event) =>
-                          setProxyRef(event.target.value)
+                        onValueChange={(selectedValue) =>
+                          setProxyRef(selectedValue)
                         }
                       >
-                        <option value=''>Select a proxy</option>
+                        <SelectOption value=''>Select a proxy</SelectOption>
                         {proxies.map((proxy) => (
-                          <option
+                          <SelectOption
                             key={proxyIdentity(proxy)}
                             value={proxyIdentity(proxy)}
                           >
                             {proxy.hostname || proxyIdentity(proxy)}
-                          </option>
+                          </SelectOption>
                         ))}
-                      </select>
+                      </SelectField>
                     ) : (
                       <span />
                     )}
                     {destinationKind === 'proxy' && (
                       <>
-                        <select
+                        <SelectField
                           aria-label='New destination protocol'
-                          className='h-9 rounded-md border bg-background px-3 text-sm'
                           value={trafficProtocol}
-                          onChange={(event) =>
+                          onValueChange={(selectedValue) =>
                             setTrafficProtocol(
-                              event.target
-                                .value as typeof trafficProtocol,
+                              selectedValue as typeof trafficProtocol,
                             )
                           }
                         >
-                          <option>PROXY</option>
-                          <option>HTTP</option>
-                          <option>HTTPS</option>
-                          <option>SOCKS</option>
-                          <option>SOCKS4</option>
-                          <option>SOCKS5</option>
-                        </select>
+                          <SelectOption value='PROXY'>PROXY</SelectOption>
+                          <SelectOption value='HTTP'>HTTP</SelectOption>
+                          <SelectOption value='HTTPS'>HTTPS</SelectOption>
+                          <SelectOption value='SOCKS'>SOCKS</SelectOption>
+                          <SelectOption value='SOCKS4'>SOCKS4</SelectOption>
+                          <SelectOption value='SOCKS5'>SOCKS5</SelectOption>
+                        </SelectField>
                         <Input
                           aria-label='New destination port'
                           placeholder='Traffic port'

@@ -37,6 +37,7 @@ const COLUMN_GAP = 4;
 const COLUMN_MIN_WIDTH = 3;
 const COLUMN_GRID_LEFT = 68;
 const COLUMN_GRID_RIGHT = 12;
+const DENSITY_COLORS = ['#dddddd', '#ffff00', '#8b0000'];
 
 // Resolve the application's CSS tokens to RGB for ECharts' canvas and color utilities.
 function chartPalette(dark: boolean) {
@@ -96,8 +97,18 @@ export default function TrafficTimeline({
     border: '#e5e5e5',
   });
   useEffect(() => {
-    setPalette(chartPalette(resolvedTheme === 'dark'));
-  }, [resolvedTheme]);
+    const root = document.documentElement;
+    const updatePalette = () =>
+      setPalette(chartPalette(root.classList.contains('dark')));
+    // Read tokens after next-themes applies the class, not before its effect runs.
+    const observer = new MutationObserver(updatePalette);
+    observer.observe(root, {
+      attributes: true,
+      attributeFilter: ['class'],
+    });
+    updatePalette();
+    return () => observer.disconnect();
+  }, []);
   useEffect(() => {
     if (!element) return;
     const measure = () =>
@@ -176,8 +187,10 @@ export default function TrafficTimeline({
     textStyle: { color },
     grid: {
       top: density ? 5 : 12,
-      left: density ? 8 : COLUMN_GRID_LEFT,
-      right: COLUMN_GRID_RIGHT,
+      left: density ? 0 : COLUMN_GRID_LEFT,
+      right: density ? 0 : COLUMN_GRID_RIGHT,
+      // Keep edge labels from shrinking the density strip away from its slider.
+      outerBoundsMode: density ? 'none' : 'auto',
       height: density ? 22.5 : undefined,
       bottom: density ? undefined : 42,
     },
@@ -190,18 +203,33 @@ export default function TrafficTimeline({
         return `${format(start)}<br/>Through ${format(start + width - 1)}<br/>${density || metric === 'requests' ? `${value.toLocaleString()} requests` : formatBytes(value)}`;
       },
     },
-    xAxis: {
-      type: 'category',
-      data: values.map((_, index) => first + index * width),
-      axisLabel: {
-        color,
-        hideOverlap: true,
-        formatter: (value: string) =>
-          format(Number(value)).slice(5, 16),
+    // The slider controls a separate axis so the heatmap keeps its full extent.
+    xAxis: [
+      {
+        type: 'category',
+        data: values.map((_, index) => first + index * width),
+        boundaryGap: true,
+        min: density ? 0 : undefined,
+        max: density ? values.length - 1 : undefined,
+        axisLabel: {
+          color,
+          hideOverlap: true,
+          formatter: (value: string) =>
+            format(Number(value)).slice(5, 16),
+        },
+        axisTick: { show: false },
+        axisLine: { show: false },
       },
-      axisTick: { show: false },
-      axisLine: { show: false },
-    },
+      ...(density && onRange
+        ? [
+            {
+              type: 'category',
+              data: values.map((_, index) => index),
+              show: false,
+            },
+          ]
+        : []),
+    ],
     yAxis: density
       ? { type: 'category', data: ['Requests'], show: false }
       : {
@@ -215,45 +243,39 @@ export default function TrafficTimeline({
           },
           splitLine: { lineStyle: { color: palette.border } },
         },
-    visualMap:
-      density && minimum !== maximum
-        ? {
-            show: false,
-            dimension: 2,
-            min: minimum,
-            max: maximum,
-            inRange: {
-              color: ['#ffffff', '#ffff00', '#8b0000'],
-            },
-            outOfRange: { color: '#ffffff' },
-          }
-        : undefined,
+    // ECharts requires a visualMap for heatmaps; cells provide their own colors.
+    visualMap: density
+      ? {
+          show: false,
+          dimension: 2,
+          min: minimum,
+          max: maximum,
+          inRange: { color: DENSITY_COLORS },
+          outOfRange: { color: DENSITY_COLORS[0] },
+        }
+      : undefined,
     dataZoom:
       density && onRange
         ? [
             {
               type: 'slider',
-              xAxisIndex: 0,
+              xAxisIndex: 1,
+              left: 0,
+              right: 0,
               bottom: 5,
-              height: 9,
+              height: 11,
+              brushSelect: false,
+              handleIcon: 'path://M-2,0H2V20H-2Z',
+              handleSize: '100%',
               fillerColor: 'rgba(255,255,255,0.25)',
               backgroundColor: palette.border,
               borderColor: palette.border,
-              brushStyle: { color: '#ffffff', opacity: 0.25 },
               handleStyle: {
-                color: '#ffffff',
-                borderColor: palette.muted,
-              },
-              moveHandleStyle: {
                 color: '#ffffff',
                 borderColor: palette.muted,
               },
               emphasis: {
                 handleStyle: {
-                  color: '#ffffff',
-                  borderColor: palette.muted,
-                },
-                moveHandleStyle: {
                   color: '#ffffff',
                   borderColor: palette.muted,
                 },
@@ -271,9 +293,45 @@ export default function TrafficTimeline({
       density
         ? {
             type: 'heatmap',
-            data: values.map((value, index) => [index, 0, value]),
+            data: values.map((value, index) => {
+              const start = first + index * width;
+              const selected =
+                (range?.start == null ||
+                  start + width - 1 >= range.start) &&
+                (range?.end == null || start <= range.end);
+              const originalColor =
+                minimum === maximum
+                  ? DENSITY_COLORS[0]
+                  : (echarts.color.lerp(
+                      Math.max(
+                        0,
+                        Math.min(
+                          1,
+                          (value - minimum) / (maximum - minimum),
+                        ),
+                      ),
+                      DENSITY_COLORS,
+                    ) as string);
+              const [red, green, blue] =
+                echarts.color.parse(originalColor)!;
+              const gray = Math.round(
+                red * 0.2126 + green * 0.7152 + blue * 0.0722,
+              );
+              return {
+                value: [index, 0, value],
+                visualMap: false,
+                itemStyle: {
+                  color: selected
+                    ? originalColor
+                    : `rgb(${gray}, ${gray}, ${gray})`,
+                  opacity: selected ? 1 : 0.5,
+                },
+                emphasis: {
+                  itemStyle: { opacity: selected ? 1 : 0.5 },
+                },
+              };
+            }),
             itemStyle: {
-              color: minimum === maximum ? '#ffffff' : undefined,
               borderWidth: 1,
               borderColor:
                 resolvedTheme === 'dark' ? '#0f172a' : '#ffffff',
@@ -384,8 +442,8 @@ export default function TrafficTimeline({
               style={{
                 background:
                   minimum === maximum
-                    ? '#ffffff'
-                    : 'linear-gradient(to right, #ffffff, #ffff00, #8b0000)',
+                    ? DENSITY_COLORS[0]
+                    : `linear-gradient(to right, ${DENSITY_COLORS.join(', ')})`,
               }}
             />
             Max {maximum.toLocaleString()} requests

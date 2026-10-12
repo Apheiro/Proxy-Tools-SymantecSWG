@@ -128,21 +128,21 @@ function CredentialsDialog({
                 <div className='flex items-center justify-between gap-3 rounded-lg bg-background px-3 py-2.5'>
                   <div>
                     <p className='text-sm font-medium'>
-                      Use live proxy data
+                      Mocked data
                     </p>
                     <p className='text-xs text-muted-foreground'>
-                      {mode === 'live'
-                        ? 'Use the existing management TLS compatibility mode.'
-                        : 'Switch on to contact the configured proxy.'}
+                      {mode === 'mock'
+                        ? 'Use sample data for offline development.'
+                        : 'Live proxy data is used by default.'}
                     </p>
                   </div>
                   <Switch
                     id='data-source-mode'
-                    checked={mode === 'live'}
+                    checked={mode === 'mock'}
                     onCheckedChange={(checked) =>
-                      setMode(checked ? 'live' : 'mock')
+                      setMode(checked ? 'mock' : 'live')
                     }
-                    aria-label='Use live proxy data'
+                    aria-label='Mocked data'
                   />
                 </div>
                 <div className='mt-3 flex items-start gap-2 text-[11px] leading-relaxed text-muted-foreground'>
