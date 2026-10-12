@@ -340,37 +340,6 @@ function PageBase() {
           </div>
         </Card>
       </section>
-
-      <section
-        className='flex flex-col gap-3 border-t pt-6'
-        aria-label='Planned analysis tools'
-      >
-        <div className='flex items-center justify-between'>
-          <div>
-            <h2 className='font-semibold'>Analysis tools</h2>
-            <p className='mt-1 text-sm text-muted-foreground'>
-              Additional views are still in development.
-            </p>
-          </div>
-          <Badge variant='outline'>Planned</Badge>
-        </div>
-        <div className='grid grid-cols-1 gap-3 sm:grid-cols-2'>
-          <Card className='gap-2 p-4'>
-            <CardTitle className='text-sm'>
-              Logs traffic analysis
-            </CardTitle>
-            <CardDescription>
-              Correlated analysis of proxy log events.
-            </CardDescription>
-          </Card>
-          <Card className='gap-2 p-4'>
-            <CardTitle className='text-sm'>Raw tail logs</CardTitle>
-            <CardDescription>
-              Direct view of incoming trace lines.
-            </CardDescription>
-          </Card>
-        </div>
-      </section>
     </main>
   );
 }
