@@ -94,7 +94,7 @@ function PageBase() {
       toast.error('Proxy not found.');
       return;
     }
-    if (!credentials) {
+    if (mode === 'live' && !credentials) {
       toast.error('Credentials not found.');
       return;
     }
@@ -133,8 +133,8 @@ function PageBase() {
       const start = invoke('start_logs', {
         ippr: ipTraceProxy,
         proxyIp,
-        userpr: credentials?.username,
-        passpr: credentials?.password,
+        userpr: mode === 'live' ? (credentials?.username ?? '') : '',
+        passpr: mode === 'live' ? (credentials?.password ?? '') : '',
         useMockData: mode === 'mock',
       });
 

@@ -11,13 +11,13 @@ const STORAGE_KEY = 'data-source-mode';
 const CHANGE_EVENT = 'data-source-mode-change';
 
 export default function useDataSourceMode() {
-  const [mode, setModeState] = useState<DataSourceMode>('mock');
+  const [mode, setModeState] = useState<DataSourceMode>('live');
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
     const readMode = () => {
       const stored = getLocalStorage<DataSourceMode>(STORAGE_KEY);
-      setModeState(stored === 'live' ? 'live' : 'mock');
+      setModeState(stored === 'mock' ? 'mock' : 'live');
       setReady(true);
     };
 

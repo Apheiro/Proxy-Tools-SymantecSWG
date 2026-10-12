@@ -34,6 +34,8 @@ import {
 import { TooltipOne } from '@/components/ui/tooltip';
 import useUrlResolver from '@/hook/useUrlResolver';
 import { storeCredentials } from '@/lib/credentialStore';
+import getCredentials from '@/lib/getCredentials';
+import useDataSourceMode from '@/lib/useDataSourceMode';
 import { getLocalStorage } from '@/lib/utilsClient';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -227,6 +229,7 @@ export default function ProxyCard({
   deleteProxy: (proxy: Proxy) => void;
 }) {
   const [openLog, setOpenLog] = useState(false);
+  const { mode, ready: modeReady } = useDataSourceMode();
   const [delAlert, setOpenAlert] = useState(false);
   const [openLogin, setOpenLogin] = useState(false);
   const [pendingProxyUrl, setPendingProxyUrl] = useState<
@@ -396,8 +399,11 @@ export default function ProxyCard({
               <DropdownMenuItem asChild>
                 <Link
                   onNavigate={(e) => {
-                    const cred = getLocalStorage('credentials');
-                    if (!cred) {
+                    if (!modeReady) {
+                      e.preventDefault();
+                      return;
+                    }
+                    if (mode === 'live' && !getCredentials()) {
                       e.preventDefault();
                       setOpenLogin(true);
                     }
