@@ -1,0 +1,76 @@
+name: Build Windows EXE
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          package-manager-cache: false
+
+      - name: Install pnpm
+        shell: pwsh
+        run: |
+          npm install --global pnpm@10
+          pnpm --version
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Tauri application
+        run: pnpm run tauri build -- --no-bundle
+
+      - name: Locate executable
+        id: locate-exe
+        shell: pwsh
+        run: |
+          $directories = @(
+            "src-tauri/target/release",
+            "target/release"
+          )
+
+          $exe = $null
+
+          foreach ($directory in $directories) {
+            if (Test-Path $directory) {
+              $exe = Get-ChildItem `
+                -Path $directory `
+                -Filter "*.exe" `
+                -File |
+                Select-Object -First 1
+
+              if ($exe) {
+                break
+              }
+            }
+          }
+
+          if (-not $exe) {
+            throw "No .exe found in the expected release directories."
+          }
+
+          "exe_path=$($exe.FullName)" >> $env:GITHUB_OUTPUT
+          Write-Host "Executable found: $($exe.FullName)"
+
+      - name: Upload executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-executable
+          path: ${{ steps.locate-exe.outputs.exe_path }}
+          if-no-files-found: error
+          retention-days: 3
