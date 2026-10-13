@@ -2,6 +2,18 @@ name: Build Windows EXE
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing release tag to build and attach the EXE to (empty = artifact only)
+        required: false
+        type: string
+        default: ''
+  workflow_call:
+    inputs:
+      release_tag:
+        description: Existing release tag to build and attach the EXE to
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -9,10 +21,14 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -32,6 +48,24 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Validate application versions and release tag
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $tauriVersion = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          $cargo = Get-Content src-tauri/Cargo.toml -Raw
+          $lock = Get-Content src-tauri/Cargo.lock -Raw
+          $cargoVersion = [regex]::Match($cargo, '(?ms)^\[package\]\s*.*?^version\s*=\s*"([^"]+)"').Groups[1].Value
+          $lockVersion = [regex]::Match($lock, '(?m)^name = "proxytools"\r?\nversion = "([^"]+)"').Groups[1].Value
+          if ($version -ne $tauriVersion -or $version -ne $cargoVersion -or $version -ne $lockVersion) {
+            throw "Application versions disagree: package=$version, tauri=$tauriVersion, cargo=$cargoVersion, lock=$lockVersion"
+          }
+          if ($env:RELEASE_TAG -and $env:RELEASE_TAG -cne "v$version") {
+            throw "Release tag does not match application version: $env:RELEASE_TAG / v$version"
+          }
+
       - name: Build Tauri application
         run: pnpm run tauri build -- --no-bundle
 
@@ -50,7 +84,7 @@ jobs:
             if (Test-Path $directory) {
               $exe = Get-ChildItem `
                 -Path $directory `
-                -Filter "*.exe" `
+                -Filter "proxytools.exe" `
                 -File |
                 Select-Object -First 1
 
@@ -61,7 +95,7 @@ jobs:
           }
 
           if (-not $exe) {
-            throw "No .exe found in the expected release directories."
+            throw "proxytools.exe was not found in the expected release directories."
           }
 
           "exe_path=$($exe.FullName)" >> $env:GITHUB_OUTPUT
@@ -74,3 +108,19 @@ jobs:
           path: ${{ steps.locate-exe.outputs.exe_path }}
           if-no-files-found: error
           retention-days: 3
+
+      - name: Attach executable to GitHub release
+        if: inputs.release_tag != ''
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          EXE_PATH: ${{ steps.locate-exe.outputs.exe_path }}
+        run: |
+          $asset = Join-Path $env:RUNNER_TEMP "proxytools-$($env:RELEASE_TAG)-windows-x64.exe"
+          Copy-Item -LiteralPath $env:EXE_PATH -Destination $asset
+          gh release upload "$env:RELEASE_TAG" "$asset" --clobber
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to upload executable to release $env:RELEASE_TAG"
+          }
