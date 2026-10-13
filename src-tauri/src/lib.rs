@@ -86,7 +86,10 @@
 mod utils;
 mod proxy_transport;
 mod proxy_network;
+mod credential_vault;
 mod credentials;
+mod app_updates;
+use app_updates::{check_app_update, download_app_update, open_update_folder, has_update_token, save_update_token, delete_update_token, UpdateState};
 mod backup_store;
 mod backup_manager;
 mod ssh_client;
@@ -734,14 +737,16 @@ async fn get_html_data(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let context = tauri::generate_context!();
     tauri::Builder::default()
+    .manage(UpdateState::default())
     .manage(LogWorkerState::default())
     .manage(BackupState::default())
     .on_window_event(backup_manager::on_window_event)
     .manage(TrafficStreamState::default())
     .manage(AccessLogParseState::default())
     .plugin(tauri_plugin_opener::init())
-    .invoke_handler(tauri::generate_handler![start_backup, list_backups, read_backup, delete_backup, open_backup_folder, get_backup_status, read_management_credentials, save_management_credentials, delete_management_credentials, clear_management_sessions, getproxystatus, start_logs, stop_logs, open_proxy, get_html_data, fetch_pac_source, get_app_cache_paths, save_traffic_analysis, load_traffic_analysis, list_traffic_analyses, parse_access_log, get_mock_access_log, get_traffic_access_logs, start_traffic_stream, stop_traffic_stream, start_access_log_parse, append_access_log_parse_chunk, abort_access_log_parse, get_traffic_processing_config, query_traffic_capture])
-    .run(tauri::generate_context!())
+    .invoke_handler(tauri::generate_handler![check_app_update, download_app_update, open_update_folder, has_update_token, save_update_token, delete_update_token, start_backup, list_backups, read_backup, delete_backup, open_backup_folder, get_backup_status, read_management_credentials, save_management_credentials, delete_management_credentials, clear_management_sessions, getproxystatus, start_logs, stop_logs, open_proxy, get_html_data, fetch_pac_source, get_app_cache_paths, save_traffic_analysis, load_traffic_analysis, list_traffic_analyses, parse_access_log, get_mock_access_log, get_traffic_access_logs, start_traffic_stream, stop_traffic_stream, start_access_log_parse, append_access_log_parse_chunk, abort_access_log_parse, get_traffic_processing_config, query_traffic_capture])
+    .run(context)
     .expect("error while running tauri application");
 }

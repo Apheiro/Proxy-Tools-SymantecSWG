@@ -38,6 +38,7 @@ import {
 } from '@/lib/credentialStore';
 import useDataSourceMode from '@/lib/useDataSourceMode';
 import { getLocalStorage, postLocalStorage } from '@/lib/utilsClient';
+import UpdateSettings from '@/components/updateSettings';
 
 const credentialSchema = v.object({
   username: v.pipe(
@@ -218,6 +219,8 @@ function CredentialsDialog({
                   </div>
                 </form>
               </section>
+
+              <UpdateSettings key={mode} mode={mode} />
 
               <section className='rounded-xl border p-4'>
                 <div className='mb-3 flex items-center gap-3'>
