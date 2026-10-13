@@ -2,13 +2,19 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { useCallback, useEffect, useState } from 'react';
+import {
+  DATA_SOURCE_EVENT,
+  DATA_SOURCE_KEY,
+  type DataSourceMode,
+  getStoredDataSourceMode,
+} from '@/lib/dataSourceMode';
 import { clearScrapingCache } from '@/lib/scrapingCache';
-import { getLocalStorage, postLocalStorage } from '@/lib/utilsClient';
+import { postLocalStorage } from '@/lib/utilsClient';
 
-export type DataSourceMode = 'mock' | 'live';
+export type { DataSourceMode } from '@/lib/dataSourceMode';
 
-const STORAGE_KEY = 'data-source-mode';
-const CHANGE_EVENT = 'data-source-mode-change';
+const STORAGE_KEY = DATA_SOURCE_KEY;
+const CHANGE_EVENT = DATA_SOURCE_EVENT;
 
 export default function useDataSourceMode() {
   const [mode, setModeState] = useState<DataSourceMode>('live');
@@ -16,8 +22,7 @@ export default function useDataSourceMode() {
 
   useEffect(() => {
     const readMode = () => {
-      const stored = getLocalStorage<DataSourceMode>(STORAGE_KEY);
-      setModeState(stored === 'mock' ? 'mock' : 'live');
+      setModeState(getStoredDataSourceMode());
       setReady(true);
     };
 

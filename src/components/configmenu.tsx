@@ -34,6 +34,7 @@ import useTheme from '@/hook/useTheme';
 import {
   removeCredentials,
   storeCredentials,
+  useCredentialRevision,
 } from '@/lib/credentialStore';
 import useDataSourceMode from '@/lib/useDataSourceMode';
 import { getLocalStorage, postLocalStorage } from '@/lib/utilsClient';
@@ -127,9 +128,7 @@ function CredentialsDialog({
                 </div>
                 <div className='flex items-center justify-between gap-3 rounded-lg bg-background px-3 py-2.5'>
                   <div>
-                    <p className='text-sm font-medium'>
-                      Mocked data
-                    </p>
+                    <p className='text-sm font-medium'>Mocked data</p>
                     <p className='text-xs text-muted-foreground'>
                       {mode === 'mock'
                         ? 'Use sample data for offline development.'
@@ -176,9 +175,9 @@ function CredentialsDialog({
                   })}
                 >
                   <p className='text-xs text-muted-foreground'>
-                    Saved credentials are protected by Windows
-                    Credential Manager. Mock requests never include
-                    them.
+                    {mode === 'mock'
+                      ? 'Mock credentials are saved in localStorage on this device. Local SSH backups use them.'
+                      : 'Saved credentials are protected by Windows Credential Manager. Mock HTTP requests never include them.'}
                   </p>
 
                   <div className='flex flex-col gap-2'>
@@ -303,24 +302,24 @@ export default function ConfigMenu({
   const [credentials, setCredentials] = useState<Credentials | null>(
     null,
   );
+  const revision = useCredentialRevision();
   const saveCredentials = (cred: Credentials) => {
     void storeCredentials(cred)
       .then(() => {
-        setCredentials(cred);
-        toast.success('Credentials saved securely.');
+        toast.success('Credentials saved.');
       })
       .catch((error) => toast.error(String(error)));
   };
 
   const deleteCredentials = () => {
-    void removeCredentials('credentials')
-      .then(() => setCredentials(null))
-      .catch((error) => toast.error(String(error)));
+    void removeCredentials('credentials').catch((error) =>
+      toast.error(String(error)),
+    );
   };
 
   useEffect(() => {
     setCredentials(getLocalStorage('credentials') || null);
-  }, []);
+  }, [revision]);
 
   return (
     <>
