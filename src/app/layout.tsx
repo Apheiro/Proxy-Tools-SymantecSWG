@@ -7,6 +7,7 @@ import CredentialProvider from '@/components/providers/credentialProvider';
 import ThemeProvider from '@/components/providers/themeprovider';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Toaster } from '@/components/ui/sonner';
+import WindowTitlebar from '@/components/window-titlebar';
 import DayjsProvider from '@/providers/dayjsExtension';
 // import ProxyGliobalDataProvider from '@/providers/proxyGlobalData';
 
@@ -22,24 +23,29 @@ export default function RootLayout({
   return (
     <html lang='en' suppressHydrationWarning>
       <body className='bg-red h-dvh overflow-hidden'>
-        <CredentialProvider>
-          <DayjsProvider>
-            <ThemeProvider
-              attribute='class'
-              defaultTheme='system'
-              enableSystem
-              disableTransitionOnChange
-            >
-              <Navbar />
-              <ScrollArea className='h-[calc(100dvh-53px)] w-dvw'>
-                <TooltipProvider delayDuration={10}>
-                  {children}
-                </TooltipProvider>
-                <Toaster position='top-center' />
-              </ScrollArea>
-            </ThemeProvider>
-          </DayjsProvider>
-        </CredentialProvider>
+        <ThemeProvider
+          attribute='class'
+          defaultTheme='system'
+          enableSystem
+          disableTransitionOnChange
+        >
+          <div className='flex h-full min-w-0 flex-col'>
+            <WindowTitlebar />
+            <CredentialProvider>
+              <DayjsProvider>
+                <div className='flex min-h-0 min-w-0 flex-1 flex-col'>
+                  <Navbar />
+                  <ScrollArea className='min-h-0 w-full flex-1'>
+                    <TooltipProvider delayDuration={10}>
+                      {children}
+                    </TooltipProvider>
+                  </ScrollArea>
+                </div>
+              </DayjsProvider>
+            </CredentialProvider>
+          </div>
+          <Toaster position='top-center' />
+        </ThemeProvider>
       </body>
     </html>
   );

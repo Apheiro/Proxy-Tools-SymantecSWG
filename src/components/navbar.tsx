@@ -139,7 +139,7 @@ export default function Navbar() {
   ];
 
   return (
-    <nav className='flex items-center gap-3 border-b px-4 py-2'>
+    <nav className='flex shrink-0 items-center gap-3 border-b px-4 py-2'>
       <Button
         variant='ghost'
         size='icon'
