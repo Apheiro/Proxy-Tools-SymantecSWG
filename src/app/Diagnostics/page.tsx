@@ -5,6 +5,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import {
   Activity,
+  Archive,
   ArrowUpRight,
   FileText,
   Network,
@@ -172,6 +173,18 @@ function PageBase() {
               Open analysis{' '}
               <ArrowUpRight className='size-4 transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5' />
             </span>
+          </div>
+        </Card>
+      </Link>
+
+      <Link href={{ pathname: '/Diagnostics/BackupManager', query: { proxy } }} className='group rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'>
+        <Card className='gap-3 p-4 transition-colors group-hover:border-primary/50 group-hover:bg-accent/40'>
+          <div className='flex items-center justify-between gap-4'>
+            <div className='flex items-center gap-3'>
+              <Archive className='size-5' />
+              <div><h2 className='font-semibold'>Backup Manager</h2><p className='mt-1 text-sm text-muted-foreground'>Create and browse appliance configuration backups over SSH.</p></div>
+            </div>
+            <ArrowUpRight className='size-4' />
           </div>
         </Card>
       </Link>

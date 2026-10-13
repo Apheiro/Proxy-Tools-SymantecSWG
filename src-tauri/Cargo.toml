@@ -39,8 +39,12 @@ tokio-util = "0.7.16"
 rusqlite = { version = "0.40.0", features = ["bundled"] }
 surge-ping = "=0.8.4"
 hickory-resolver = { version = "=0.25.2", default-features = false, features = ["tokio", "system-config"] }
+russh = { version = "=0.63.3", default-features = false, features = ["ring", "rsa"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "=0.61.0", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_System_IO"] }
 webview2-com = "=0.38.0"
 windows = { version = "=0.61.3", features = ["Win32_Security_Credentials"] }
+
+[dev-dependencies]
+rand = "0.10"

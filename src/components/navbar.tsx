@@ -110,6 +110,7 @@ import { Button } from '@/components/ui/button';
 import ConfigMenu from './configmenu';
 
 const LABELS: Record<string, string> = {
+  BackupManager: 'Backup Manager',
   trace: 'Trace',
   config: 'Config',
   settings: 'Settings',
