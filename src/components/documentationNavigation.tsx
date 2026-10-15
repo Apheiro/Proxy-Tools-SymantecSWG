@@ -1,6 +1,18 @@
 'use client';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { cva } from '@/lib/cva';
+
+const documentationLinkStyles = cva({
+  base: 'rounded-md px-3 py-2 text-sm',
+  variants: {
+    selected: {
+      true: 'bg-primary/10 font-medium text-primary',
+      false:
+        'text-muted-foreground hover:bg-muted hover:text-foreground',
+    },
+  },
+});
 
 export const documentationLinks = [
   ['', 'Overview'],
@@ -27,7 +39,9 @@ export default function DocumentationNavigation() {
             key={href}
             href={href}
             aria-current={path === href ? 'page' : undefined}
-            className={`rounded-md px-3 py-2 text-sm ${path === href ? 'bg-primary/10 font-medium text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}
+            className={documentationLinkStyles({
+              selected: path === href,
+            })}
           >
             {label}
           </Link>

@@ -23,6 +23,12 @@ import {
   type DateTimePrecision,
 } from '@/lib/dateTime';
 import { cn } from '@/lib/utils';
+import { cva } from '@/lib/cva';
+
+const dateValueStyles = cva({
+  base: 'truncate',
+  variants: { empty: { true: 'text-muted-foreground', false: '' } },
+});
 
 const fieldClass =
   'border-input bg-background flex h-9 w-full min-w-0 items-center rounded-md border px-3 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50';
@@ -184,12 +190,7 @@ export function DateTimePicker({
               triggerClassName,
             )}
           >
-            <span
-              className={cn(
-                'truncate',
-                !value && 'text-muted-foreground',
-              )}
-            >
+            <span className={dateValueStyles({ empty: !value })}>
               {display ? display.replace('T', ' ') : placeholder}
             </span>
             <CalendarClock className='size-4 shrink-0 text-muted-foreground' />

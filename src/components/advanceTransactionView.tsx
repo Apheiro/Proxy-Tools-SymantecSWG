@@ -3,7 +3,7 @@ import {
   type UseDisclosureHandlers,
   useDisclosure,
 } from '@mantine/hooks';
-import { cva } from 'class-variance-authority';
+import { cva } from '@/lib/cva';
 import { find } from 'lodash-es';
 import {
   ChevronDown,
@@ -190,7 +190,7 @@ function Connection({
   );
 }
 
-const MatchStyle = cva(['rounded-sm', ' p-2', 'relative'], {
+const MatchStyle = cva({ base: ['rounded-sm', ' p-2', 'relative'],
   variants: {
     type: {
       allowed: 'bg-green-300/10',
@@ -199,10 +199,9 @@ const MatchStyle = cva(['rounded-sm', ' p-2', 'relative'], {
       base: 'bg-transparent',
     },
   },
-});
+ });
 
-const DotStyle = cva(
-  [
+const DotStyle = cva({ base: [
     'before:content-[""]',
     'before:animate-ping',
     'before:left-0',
@@ -219,7 +218,6 @@ const DotStyle = cva(
     'top-[calc(50%-3px)]',
     'left-[-20px]',
   ],
-  {
     variants: {
       type: {
         allowed: 'bg-green-300 before:bg-green-300',
@@ -228,8 +226,7 @@ const DotStyle = cva(
         base: 'bg-gray-300/50',
       },
     },
-  },
-);
+   });
 
 function PolicyMatch({ match }: { match: string }) {
   const [veredict, setVerdict] = useState<

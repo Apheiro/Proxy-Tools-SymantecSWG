@@ -1,9 +1,9 @@
 import * as TooltipPrimitive from '@radix-ui/react-tooltip';
-import { cva } from 'class-variance-authority';
+import { cva } from '@/lib/cva';
 import * as React from 'react';
 import { cn } from '@/lib/utils';
 
-const tooltipComplete = cva(['max-w-40']);
+const tooltipComplete = cva({ base: ['max-w-40'] });
 
 function TooltipProvider({
   delayDuration = 0,

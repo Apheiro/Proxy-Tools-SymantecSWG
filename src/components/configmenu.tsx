@@ -1,7 +1,7 @@
 /** biome-ignore-all lint/correctness/useUniqueElementIds: <> */
 'use client';
 import { useForm } from '@mantine/form';
-import { cva } from 'class-variance-authority';
+import { cva } from '@/lib/cva';
 import {
   Check,
   Database,
@@ -288,12 +288,12 @@ function CredentialsDialog({
   );
 }
 
-const configMenuBtnStyles = cva([
+const configMenuBtnStyles = cva({ base: [
   'h-7',
   'w-7',
   'text-muted-foreground',
   'hover:text-foreground',
-]);
+],  });
 
 export default function ConfigMenu({
   className,
