@@ -93,6 +93,9 @@ use app_updates::{check_app_update, download_app_update, open_update_folder, has
 mod backup_store;
 mod backup_manager;
 mod ssh_client;
+mod ssh_target;
+mod ssh_console;
+use ssh_console::{ConsoleState, get_ssh_session, continue_ssh_console, close_other_ssh_profiles, connect_ssh_console, list_ssh_sessions, send_ssh_input, disconnect_ssh_console, interrupt_ssh_console, read_ssh_output, remove_ssh_session};
 use backup_manager::{start_backup, list_backups, read_backup, delete_backup, open_backup_folder, get_backup_status, BackupState};
 use credentials::{read_management_credentials, save_management_credentials, delete_management_credentials};
 use proxy_transport::clear_management_sessions;
@@ -776,11 +779,12 @@ pub fn run() {
     .manage(UpdateState::default())
     .manage(LogWorkerState::default())
     .manage(BackupState::default())
+    .manage(ConsoleState::default())
     .on_window_event(backup_manager::on_window_event)
     .manage(TrafficStreamState::default())
     .manage(AccessLogParseState::default())
     .plugin(tauri_plugin_opener::init())
-    .invoke_handler(tauri::generate_handler![check_app_update, download_app_update, open_update_folder, has_update_token, save_update_token, delete_update_token, start_backup, list_backups, read_backup, delete_backup, open_backup_folder, get_backup_status, read_management_credentials, save_management_credentials, delete_management_credentials, clear_management_sessions, getproxystatus, start_logs, stop_logs, open_proxy, get_html_data, fetch_pac_source, get_app_cache_paths, save_traffic_analysis, load_traffic_analysis, list_traffic_analyses, parse_access_log, get_mock_access_log, get_traffic_access_logs, start_traffic_stream, stop_traffic_stream, start_access_log_parse, append_access_log_parse_chunk, abort_access_log_parse, get_traffic_processing_config, query_traffic_capture])
+    .invoke_handler(tauri::generate_handler![get_ssh_session, continue_ssh_console, close_other_ssh_profiles, connect_ssh_console, list_ssh_sessions, send_ssh_input, disconnect_ssh_console, interrupt_ssh_console, read_ssh_output, remove_ssh_session, check_app_update, download_app_update, open_update_folder, has_update_token, save_update_token, delete_update_token, start_backup, list_backups, read_backup, delete_backup, open_backup_folder, get_backup_status, read_management_credentials, save_management_credentials, delete_management_credentials, clear_management_sessions, getproxystatus, start_logs, stop_logs, open_proxy, get_html_data, fetch_pac_source, get_app_cache_paths, save_traffic_analysis, load_traffic_analysis, list_traffic_analyses, parse_access_log, get_mock_access_log, get_traffic_access_logs, start_traffic_stream, stop_traffic_stream, start_access_log_parse, append_access_log_parse_chunk, abort_access_log_parse, get_traffic_processing_config, query_traffic_capture])
     .run(context)
     .expect("error while running tauri application");
 }

@@ -38,6 +38,7 @@ export default function useDataSourceMode() {
   const setMode = useCallback((nextMode: DataSourceMode) => {
     clearScrapingCache();
     void invoke('clear_management_sessions').catch(() => undefined);
+    void invoke('close_other_ssh_profiles', { mocked: nextMode === 'mock' }).catch(() => undefined);
     postLocalStorage(STORAGE_KEY, nextMode);
     setModeState(nextMode);
     window.dispatchEvent(new Event(CHANGE_EVENT));

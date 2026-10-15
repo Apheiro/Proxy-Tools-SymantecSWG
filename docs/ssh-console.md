@@ -1,0 +1,13 @@
+# Interactive SSH console
+
+Open **SSH connection** in a proxy card's actions menu. The console uses the existing management credentials from Settings and the shared Rust SSH authentication / known-host verification. A new session opens one SSH connection and one PTY shell. Commands keep their privilege and configuration context. Navigation does not disconnect the session; Disconnect or closing the app ends it. New session reconnects explicitly without replaying commands.
+
+Live connects directly to the appliance on port 22. Mocked Data always connects directly to `127.0.0.1:2222` and starts the same dummy CLI as Backup Manager. Switching profiles closes SSH consoles belonging to the other profile. SSH does not use the HTTP proxy.
+
+The left panel indexes commands with their timestamps. Click an entry to jump to its output. Outputs can be collapsed and copied; both the history and transcript use TanStack Virtual. Command output streams to the existing app cache, with only 32 KiB segments loaded into the renderer. Previous / Next reads the complete output incrementally, and Follow displays the latest segment. Copy reads the full current output explicitly. A running command can still produce more output after a copy.
+
+The input is line-oriented. Appliance prompts determine when a command completes. Password / passphrase / verification challenges switch to a hidden input and responses stay with the current command, outside command history. Sensitive response can be selected manually for other confidential challenges. Recognized secret values are redacted even if echoed in fragmented SSH packets. Commands themselves and appliance configuration output can contain sensitive data; they are ordinary session cache files, not a credential vault.
+
+Use Continue / Space for the appliance pager and Ctrl+C to interrupt. Other interactive replies can be sent through the input while a command is running. This is an appliance CLI transcript, not an ANSI terminal emulator for full-screen editors. A quiet interval alone never completes a command without a recognized prompt. Sessions use SSH keepalives; a lost connection is surfaced and requires a new session.
+
+Session metadata/history remains available during the current app run. Cached output stays on disk until Remove session or manual cache cleanup; previous sessions are not restored after restarting the app. Limits are 32 retained sessions and 5,000 commands per session. Reaching a limit is reported explicitly, without silently discarding output.

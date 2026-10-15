@@ -2,7 +2,7 @@ use super::*;
 use crate::ssh_client::password_challenge;
 use russh::{client, server, Channel, ChannelId};
 use std::{path::PathBuf, sync::Arc};
-const TEST_PASSWORD: &str = r#"test!\*&$'" ñ password"#;
+pub(crate) const TEST_PASSWORD: &str = r#"test!\*&$'" ñ password"#;
 
 struct Dummy {
     auth_round: usize,
@@ -227,7 +227,7 @@ impl server::Handler for Dummy {
     }
 }
 
-async fn fixture_connection(
+pub(crate) async fn fixture_connection(
     failure: &'static str,
 ) -> (
     SshConnection,

@@ -41,6 +41,7 @@ pub(crate) struct SshOptions {
     pub operation_timeout: Duration,
     pub idle_timeout: Duration,
     pub pty: Option<PtyOptions>,
+    pub persistent: bool,
 }
 impl SshOptions {
     pub(crate) fn new(host: impl Into<String>, port: u16, known_hosts: PathBuf) -> Self {
@@ -51,6 +52,7 @@ impl SshOptions {
             operation_timeout: Duration::from_secs(30),
             idle_timeout: Duration::from_secs(60),
             pty: Some(PtyOptions::default()),
+            persistent: false,
         }
     }
 }
@@ -87,7 +89,8 @@ impl SshConnection {
             return Err("SSH destination is invalid.".into());
         }
         let config = Arc::new(client::Config {
-            inactivity_timeout: Some(options.idle_timeout),
+            inactivity_timeout: (!options.persistent).then_some(options.idle_timeout),
+            keepalive_interval: options.persistent.then_some(Duration::from_secs(30)),
             ..Default::default()
         });
         let handler = SshHost {
@@ -123,6 +126,23 @@ impl SshConnection {
         command: Option<&str>,
         policy: PromptPolicy,
     ) -> Result<Cli, String> {
+        let channel = self.open_shell(command).await?;
+        Ok(Cli {
+            channel,
+            base: String::new(),
+            current_prompt: String::new(),
+            at_prompt: false,
+            operation_timeout: self.options.operation_timeout,
+            idle_timeout: self.options.idle_timeout,
+            policy,
+        })
+    }
+
+    /// Raw streaming shell for interactive consoles; automation keeps using Cli.
+    pub(crate) async fn open_shell(
+        &self,
+        command: Option<&str>,
+    ) -> Result<Channel<client::Msg>, String> {
         let duration = self.options.operation_timeout;
         let channel = bounded(self.handle.channel_open_session(), duration).await?;
         if let Some(pty) = &self.options.pty {
@@ -145,15 +165,7 @@ impl SshConnection {
         } else {
             bounded(channel.request_shell(true), duration).await?;
         }
-        Ok(Cli {
-            channel,
-            base: String::new(),
-            current_prompt: String::new(),
-            at_prompt: false,
-            operation_timeout: duration,
-            idle_timeout: self.options.idle_timeout,
-            policy,
-        })
+        Ok(channel)
     }
     pub(crate) async fn disconnect(&self) -> Result<(), String> {
         bounded(
@@ -360,19 +372,32 @@ async fn authenticate(
     }
 }
 
-fn terminal_text(value: &str) -> std::borrow::Cow<'_, str> {
+pub(crate) fn terminal_text(value: &str) -> std::borrow::Cow<'_, str> {
     static ANSI: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| {
         regex::Regex::new(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\))").unwrap()
     });
     ANSI.replace_all(value, "")
 }
 
-fn prompt(tail: &[u8], base: Option<&str>, policy: &PromptPolicy) -> Option<(usize, String)> {
+pub(crate) fn prompt(
+    tail: &[u8],
+    base: Option<&str>,
+    policy: &PromptPolicy,
+) -> Option<(usize, String)> {
     let start = tail.iter().rposition(|c| *c == b'\n').map_or(0, |i| i + 1);
     // Preserve output bytes while recognizing decorated Windows ConPTY prompts.
     let clean = terminal_text(std::str::from_utf8(&tail[start..]).ok()?);
     let line = clean.trim();
     if let Some(base) = base {
+        if policy.suffixes.iter().any(|suffix| suffix == "#(config)")
+            && line.strip_prefix(base).is_some_and(|suffix| {
+                suffix.starts_with("#(config")
+                    && suffix.ends_with(')')
+                    && !suffix.contains(['\r', '\n'])
+            })
+        {
+            return Some((start, line.to_owned()));
+        }
         if policy
             .suffixes
             .iter()

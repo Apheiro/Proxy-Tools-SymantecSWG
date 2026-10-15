@@ -1,7 +1,7 @@
 import { useForm } from '@mantine/form';
 import { invoke } from '@tauri-apps/api/core';
 import dayjs from 'dayjs';
-import { AlertCircle, MoreHorizontal, Tags } from 'lucide-react';
+import { AlertCircle, MoreHorizontal, Tags, Terminal } from 'lucide-react';
 import { valibotResolver } from 'mantine-form-valibot-resolver';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -375,6 +375,11 @@ export default function ProxyCard({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent>
+            <DropdownMenuItem asChild>
+              <Link href={{ pathname: '/Diagnostics/SSH', query: { proxy: proxyAddress } }}>
+                <Terminal className='size-4' />SSH connection
+              </Link>
+            </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => setOpenTags(true)}>
               <Tags className='size-4' />
               Edit tags

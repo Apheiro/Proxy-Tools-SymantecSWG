@@ -1,7 +1,8 @@
 use crate::backup_store::{self, BackupMode, BackupRecord};
 use crate::ssh_client::{
-    command_failed, Cli, PromptPolicy, Response, SshConnection, SshEvent, SshOptions,
+    command_failed, Cli, Response, SshConnection, SshEvent, SshOptions,
 };
+use crate::ssh_target::{sgos_prompt_policy, SshTarget};
 use serde::{Deserialize, Serialize};
 use std::{sync::Mutex, time::Duration};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -10,14 +11,6 @@ use tokio::io::AsyncWriteExt;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(1800);
 const SHOW: &str = "show configuration expanded noprompts";
-
-fn ssh_port(mocked: bool) -> u16 {
-    if mocked {
-        2222
-    } else {
-        22
-    }
-}
 
 #[derive(Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -65,14 +58,7 @@ pub struct BackupRequest {
 }
 
 fn destination(request: &BackupRequest) -> Result<String, String> {
-    if request.mocked {
-        return Ok("127.0.0.1".into());
-    }
-    let value = request.address.trim();
-    if value.is_empty() || value.contains(['/', '\\', '@', '\n', '\r', ' ']) {
-        return Err("Invalid appliance SSH address.".into());
-    }
-    Ok(value.to_owned())
+    SshTarget::appliance(&request.address, request.mocked).map(|target| target.host)
 }
 
 fn update(app: &AppHandle, phase: &str, action: Option<&str>, bytes: Option<u64>) {
@@ -147,7 +133,7 @@ pub fn start_backup(
     request: BackupRequest,
 ) -> Result<String, String> {
     let host = destination(&request)?;
-    let port = ssh_port(request.mocked);
+    let port = SshTarget::port(request.mocked);
     if request.username.trim().is_empty()
         || request.password.is_empty()
         || request.password.contains(['\n', '\r'])
@@ -204,14 +190,6 @@ fn ssh_progress(app: Option<&AppHandle>, event: SshEvent) {
         SshEvent::Command(command) => update(app, "Executing command", Some(&command), None),
         SshEvent::OutputBytes(bytes) => update(app, "Capturing configuration", None, Some(bytes)),
     }
-}
-
-fn sgos_prompt_policy() -> PromptPolicy {
-    PromptPolicy::new(
-        r"^([A-Za-z0-9_. /:-]{1,120})([>#])(?:\(config\))?$",
-        &[">", "#", "#(config)"],
-    )
-    .expect("Valid SGOS prompt policy")
 }
 
 async fn restore_private_keys(cli: &mut Cli, app: Option<&AppHandle>) -> Result<(), String> {
@@ -346,7 +324,7 @@ async fn run_backup(
 ) -> Result<BackupRecord, String> {
     let mut session = SshConnection::connect(SshOptions::new(
         host,
-        ssh_port(request.mocked),
+        SshTarget::port(request.mocked),
         root.join("backup-ssh-known-hosts"),
     ))
     .await?;
@@ -361,13 +339,11 @@ async fn run_backup(
         session
             .authenticate(&request.username, &request.password, Some(&report))
             .await?;
-        let command = if request.mocked {
-            let command = r"powershell.exe -NoProfile -File C:\ssh-dummy\dummy.ps1";
+        let target = SshTarget::appliance(&request.address, request.mocked)?;
+        let command = target.startup;
+        if let Some(command) = command {
             update(app, "Starting dummy CLI", Some(command), None);
-            Some(command)
-        } else {
-            None
-        };
+        }
         let mut cli = session.open_cli(command, sgos_prompt_policy()).await?;
         let id = get_backup_status(app.state()).id;
         let partial = backup_store::path(root, &id, "part")?;
@@ -419,7 +395,7 @@ async fn run_backup(
 
 #[cfg(test)]
 #[path = "backup_manager_tests.rs"]
-mod ssh_tests;
+pub(crate) mod ssh_tests;
 
 #[cfg(test)]
 mod tests {
@@ -435,9 +411,9 @@ mod tests {
             mocked: true,
         };
         assert_eq!(destination(&request).unwrap(), "127.0.0.1");
-        assert_eq!(ssh_port(request.mocked), 2222);
+        assert_eq!(SshTarget::port(request.mocked), 2222);
         request.mocked = false;
-        assert_eq!(ssh_port(request.mocked), 22);
+        assert_eq!(SshTarget::port(request.mocked), 22);
         assert_eq!(destination(&request).unwrap(), "real-appliance.example");
     }
 }

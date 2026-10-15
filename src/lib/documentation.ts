@@ -50,6 +50,10 @@ export const documentationTopics: Record<DocumentationSlug, Topic> = {
             'Read the selected appliance’s policy index and open Trace or Traffic Analysis. The proxy query parameter carries this context across static pages.',
           ],
           [
+            'SSH connection',
+            'Open an interactive shell with the saved SSH credentials. One persistent connection preserves enable/configuration context. The left history jumps to command output; blocks collapse and copy, while large output is paged and virtualized. Password challenges use hidden responses outside history. Disconnect explicitly; navigation keeps the session alive. Mocked SSH uses only 127.0.0.1:2222 and the shared dummy CLI.',
+          ],
+          [
             'Management console',
             'Open a separate WebView window. Windows WebView2 responds to HTTP Basic authentication challenges with the application credentials; credentials are not embedded in the URL. Windows WebView2 automatically accepts certificate errors for the initial management HTTPS origin. Other origins retain normal certificate validation; this is separate from Rust HTTP clients.',
           ],
@@ -426,6 +430,10 @@ export const documentationTopics: Record<DocumentationSlug, Topic> = {
           [
             'PAC exports',
             'Download a .pac file through the WebView; Windows/WebView2 chooses the download location. The app does not write back to the remote source.',
+          ],
+          [
+            'SSH console output',
+            'ssh-<session-id>/<command-index>.txt under the existing app cache. Session history lasts for this app run; Remove session deletes its cached output after disconnection. Secret responses are redacted, but command/configuration output can contain sensitive information.',
           ],
           [
             'Uploaded logs',
