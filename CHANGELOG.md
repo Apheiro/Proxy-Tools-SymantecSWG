@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.3.0](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/compare/v0.2.0...v0.3.0) (2026-10-15)
+
+
+### Features
+
+* **proxy:** add persistent tags and grouped inventory ([555e7ae](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/commit/555e7aedd2e5f74fb8acd0e3ceed9a2c62438e4b))
+* **ssh:** add persistent interactive appliance console ([88db89d](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/commit/88db89de9336c68703a5679906f34f3b59b43b1f))
+* **trace:** group and virtualize policy transactions using explicit handoffs ([a0c16b8](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/commit/a0c16b8d1a15a852fea2e7745d7926dbd4fcd96a))
+
+
+### Bug Fixes
+
+* **navigation:** retain selected proxy in diagnostics breadcrumbs ([81da331](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/commit/81da331803b433ee8c47fffb708a9de7775e8f57))
+* **updates:** render release notes in a larger scrollable markdown dialog ([2fb258c](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/commit/2fb258c061de1075ac2abbdff473c39ae6bade4c))
+* **webview:** bypass appliance certificate prompts in management windows ([1c1398d](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/commit/1c1398dd9a6b1c56189e456ce85a371ac449bca7))
+
 ## [0.2.0](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/compare/v0.1.0...v0.2.0) (2026-10-13)
 
 
