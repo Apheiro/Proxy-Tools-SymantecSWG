@@ -1,6 +1,8 @@
 # Application updates
 
-The app checks `Apheiro/Proxy-Tools-SymantecSWG` for the latest stable GitHub release at native startup. A newer semantic version is announced with a clickable Sonner notification at the bottom right. Other notifications keep their existing position. Clicking the notification opens the shared Radix dialog with the complete release body displayed as text, without executing HTML from the release notes.
+The app checks `Apheiro/Proxy-Tools-SymantecSWG` for the latest stable GitHub release at native startup. A newer semantic version is announced with a clickable Sonner notification at the bottom right. Other notifications keep their existing position. Clicking the notification opens the shared Radix dialog with the complete release body formatted using `markdown-to-jsx`. The renderer loads on demand when the dialog opens, reuses the application's theme tokens and renders headings, lists, emphasis, code, tables and links. Embedded HTML is treated as text, remote images are not loaded and only HTTPS links can open through the existing Tauri Opener plugin.
+
+The release-notes dialog uses a wider desktop layout and a viewport-bounded height. The shared Radix ScrollArea scrolls the notes while the title and action buttons remain visible. Version comparison is unchanged: a development build still uses its local configured version, so it can legitimately report a newer published release even when the local source contains the same features. Release Please remains responsible for version bumps.
 
 The release must contain an uploaded `proxytools-vX.Y.Z-windows-x64.exe` asset with a valid GitHub SHA-256 digest. Release Please publishes the release before the Windows build finishes, so a release without its executable is not announced. Preview versions and drafts are ignored. **Settings → Application updates → Check for updates** allows retrying after the build finishes and displays network, permission and rate-limit errors. Automatic startup failures do not interrupt proxy work or display repeated error notifications.
 
@@ -29,5 +31,5 @@ The application identifier remains `com.apheiros.proxytools`. Storage uses Tauri
 ## Validation
 
 - Native tests cover semantic comparisons, stable/completed asset selection, optional authentication, rejected token/header input, destination validation, multi-megabyte download integrity and partial-file cleanup after corruption or interruption.
-- Browser tests cover the persistent clickable notification, release notes as safe text, download/retry instructions, opening the folder, mock persistence, separate live credential IPC and anonymous checks after token removal. Existing credentials and Backup Manager tests remain applicable.
+- Browser tests cover the persistent clickable notification, Markdown formatting and safe links/HTML handling, scrolling long notes with fixed title/actions, download/retry instructions, opening the folder, mock persistence, separate live credential IPC and anonymous checks after token removal. Existing credentials and Backup Manager tests remain applicable.
 - Real Windows vault access and Explorer integration require a Windows run. An authenticated end-to-end release download requires a configured token and an existing uploaded release. No live token is needed for the automated fixture tests.

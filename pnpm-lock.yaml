@@ -92,6 +92,9 @@ importers:
       mantine-form-valibot-resolver:
         specifier: ^3.0.1
         version: 3.0.1(@mantine/form@8.3.2(react@19.1.1))(valibot@1.1.0(typescript@5.9.2))
+      markdown-to-jsx:
+        specifier: ^9.10.3
+        version: 9.10.3(react@19.1.1)
       next:
         specifier: ^15.5.4
         version: 15.5.4(@playwright/test@1.64.0)(react-dom@19.1.1(react@19.1.1))(react@19.1.1)
@@ -1780,6 +1783,24 @@ packages:
     peerDependencies:
       '@mantine/form': '>=7.0.0'
       valibot: '>=1.0.0 || ^1.0.0-beta || ^1.0.0-rc'
+
+  markdown-to-jsx@9.10.3:
+    resolution: {integrity: sha512-J5/NCmNYQ0ExsnThzvF3F1fSzNYLgROcW2diUqRqoIoiyhoy8DSI06jLuMYk0c86SQd/FiVYJrV6tIgci9S2tQ==}
+    engines: {node: '>= 18'}
+    peerDependencies:
+      react: '>= 16.0.0'
+      react-native: '*'
+      solid-js: '>=1.0.0'
+      vue: '>=3.0.0'
+    peerDependenciesMeta:
+      react:
+        optional: true
+      react-native:
+        optional: true
+      solid-js:
+        optional: true
+      vue:
+        optional: true
 
   minipass@7.1.2:
     resolution: {integrity: sha512-qOOzS1cBTWYF4BH8fVePDBOO9iptMnGUEZwNc/cMWnTV2nVLZ7VoNWEPHkYczZA0pdoA7dl6e7FL659nX9S2aw==}
@@ -3492,6 +3513,10 @@ snapshots:
     dependencies:
       '@mantine/form': 8.3.2(react@19.1.1)
       valibot: 1.1.0(typescript@5.9.2)
+
+  markdown-to-jsx@9.10.3(react@19.1.1):
+    optionalDependencies:
+      react: 19.1.1
 
   minipass@7.1.2: {}
 

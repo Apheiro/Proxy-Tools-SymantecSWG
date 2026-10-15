@@ -2,6 +2,7 @@
 
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { Download, FolderOpen, LoaderCircle } from 'lucide-react';
+import dynamic from 'next/dynamic';
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -23,6 +24,28 @@ import {
   updateRequest,
 } from '@/lib/appUpdates';
 import useDataSourceMode from '@/lib/useDataSourceMode';
+import { cva } from '@/lib/cva';
+
+const updateModalStyles = cva({
+  base: 'flex max-h-[calc(100dvh-2rem)] flex-col',
+  variants: {
+    downloaded: {
+      true: 'sm:max-w-xl',
+      false: 'h-[80dvh] sm:max-w-3xl',
+    },
+  },
+});
+
+const ReleaseNotes = dynamic(
+  () => import('@/components/releaseNotes'),
+  {
+    loading: () => (
+      <p className='text-sm text-muted-foreground'>
+        Loading release notes…
+      </p>
+    ),
+  },
+);
 
 export default function AppUpdateNotifier() {
   const { mode, ready } = useDataSourceMode();
@@ -148,8 +171,10 @@ export default function AppUpdateNotifier() {
         if (!busy) setOpen(value);
       }}
     >
-      <DialogContent className='flex max-h-[85dvh] flex-col sm:max-w-xl'>
-        <DialogHeader>
+      <DialogContent
+        className={updateModalStyles({ downloaded: !!download })}
+      >
+        <DialogHeader className='shrink-0'>
           <DialogTitle>
             {download
               ? 'New executable ready'
@@ -161,7 +186,15 @@ export default function AppUpdateNotifier() {
               : `Installed version: ${update?.currentVersion ?? ''}. Review the release changes before downloading.`}
           </DialogDescription>
         </DialogHeader>
-        <ScrollArea className='min-h-0 flex-1'>
+        <ScrollArea
+          className='min-h-0 flex-1 overflow-hidden'
+          role='region'
+          aria-label={
+            download
+              ? 'Update replacement instructions'
+              : 'Release notes'
+          }
+        >
           {download ? (
             <div className='space-y-4 pr-3 text-sm'>
               <ol className='list-decimal space-y-2 pl-5'>
@@ -194,9 +227,11 @@ export default function AppUpdateNotifier() {
               </p>
             </div>
           ) : (
-            <pre className='whitespace-pre-wrap break-words pr-3 font-sans text-sm leading-relaxed'>
-              {update?.notes || 'No release notes were provided.'}
-            </pre>
+            <div className='pr-4'>
+              <ReleaseNotes>
+                {update?.notes || 'No release notes were provided.'}
+              </ReleaseNotes>
+            </div>
           )}
         </ScrollArea>
         {error && (
@@ -204,7 +239,7 @@ export default function AppUpdateNotifier() {
             {error}
           </p>
         )}
-        <DialogFooter>
+        <DialogFooter className='shrink-0'>
           <Button
             variant='outline'
             disabled={busy}

@@ -46,6 +46,7 @@ test.beforeEach(async ({ page }) => {
             failDownload: boolean;
             noUpdate: boolean;
             privateRelease: boolean;
+            releaseNotes?: string;
           };
           switch (command) {
             case 'read_management_credentials':
@@ -77,7 +78,8 @@ test.beforeEach(async ({ page }) => {
                     version: '0.2.0',
                     currentVersion: '0.1.0',
                     notes:
-                      '## Release changes\n- Improved SSH automation\n<script>never execute notes</script>',
+                      fixture.releaseNotes ??
+                      '## Release changes\n\n- Improved **SSH automation**\n- Use `enable` correctly\n\n[View changes](https://github.com/Apheiro/Proxy-Tools-SymantecSWG)\n\n[Unsafe](javascript:alert(1))\n\n<script>never execute notes</script>',
                     filename: 'proxytools-v0.2.0-windows-x64.exe',
                     bytes: 1_000_000,
                   };
@@ -117,8 +119,22 @@ test('startup toast opens release notes and verified download instructions', asy
   await notice.click();
   const dialog = page.getByRole('dialog');
   await expect(
-    dialog.getByText(/Improved SSH automation/),
+    dialog.getByRole('heading', { name: 'Release changes' }),
   ).toBeVisible();
+  await expect(dialog.locator('li strong')).toHaveText(
+    'SSH automation',
+  );
+  await expect(dialog.locator('li code')).toHaveText('enable');
+  await expect(
+    dialog.getByRole('link', { name: 'View changes' }),
+  ).toHaveAttribute(
+    'href',
+    'https://github.com/Apheiro/Proxy-Tools-SymantecSWG',
+  );
+  await expect(dialog.locator('script')).toHaveCount(0);
+  await expect(
+    dialog.getByRole('link', { name: 'Unsafe' }),
+  ).toHaveCount(0);
   await expect(
     dialog.getByText(/<script>never execute notes<\/script>/),
   ).toBeVisible();
@@ -163,6 +179,60 @@ test('startup toast opens release notes and verified download instructions', asy
   expect(
     calls.some((call) => call.command === 'plugin:window|close'),
   ).toBe(false);
+});
+
+test('large release notes scroll inside the wider dialog while actions remain visible', async ({
+  page,
+}, testInfo) => {
+  await page.evaluate(() => {
+    Object.assign(window, {
+      releaseNotes:
+        '## Long release notes\n\n' +
+        '- A fixed issue with **formatted details**.\n'.repeat(200) +
+        '\nFINAL-RELEASE-NOTE',
+    });
+    window.dispatchEvent(new Event('app-update-check'));
+  });
+  const notice = page.getByRole('button', {
+    name: /Proxy Tools 0.2.0 is available/,
+  });
+  await notice.click();
+  const dialog = page.getByRole('dialog');
+  await expect(
+    dialog.getByRole('heading', { name: 'Long release notes' }),
+  ).toBeVisible();
+  const bounds = await dialog.boundingBox();
+  expect(bounds!.width).toBeGreaterThan(650);
+  expect(bounds!.height).toBeLessThanOrEqual(800 * 0.85);
+  const viewport = dialog
+    .getByRole('region', { name: 'Release notes', exact: true })
+    .locator('[data-radix-scroll-area-viewport]');
+  expect(
+    await viewport.evaluate(
+      (element) => element.scrollHeight > element.clientHeight,
+    ),
+  ).toBe(true);
+  await expect(
+    dialog.getByRole('button', {
+      name: 'Download update',
+      exact: true,
+    }),
+  ).toBeInViewport();
+  await viewport.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+  });
+  await expect(
+    dialog.getByText('FINAL-RELEASE-NOTE'),
+  ).toBeInViewport();
+  await expect(
+    dialog.getByRole('heading', {
+      name: 'Proxy Tools 0.2.0',
+      exact: true,
+    }),
+  ).toBeInViewport();
+  await page.screenshot({
+    path: testInfo.outputPath('release-notes-dialog.png'),
+  });
 });
 
 test('failed verification leaves a retry button and never shows ready', async ({
