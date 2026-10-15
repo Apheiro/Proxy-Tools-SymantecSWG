@@ -195,7 +195,12 @@ async fn open_proxy(
     unsafe {
       use webview2_com::{
         BasicAuthenticationRequestedEventHandler,
-        Microsoft::Web::WebView2::Win32::ICoreWebView2_10,
+        ServerCertificateErrorDetectedEventHandler,
+        Microsoft::Web::WebView2::Win32::{
+          ICoreWebView2_10,
+          ICoreWebView2_14,
+          COREWEBVIEW2_SERVER_CERTIFICATE_ERROR_ACTION_ALWAYS_ALLOW,
+        },
       };
       use windows::core::{Interface, PCWSTR};
 
@@ -214,6 +219,38 @@ async fn open_proxy(
           return;
         }
       };
+
+      let webview_with_certificates = match core_webview.cast::<ICoreWebView2_14>() {
+        Ok(webview) => webview,
+        Err(error) => {
+          eprintln!("WebView2 ServerCertificateErrorDetected is unavailable: {error}");
+          return;
+        }
+      };
+      let certificate_origin = url.origin();
+      let certificate_handler = ServerCertificateErrorDetectedEventHandler::create(Box::new(
+        move |_sender, args| {
+          if let Some(args) = args {
+            let mut uri = windows::core::PWSTR::null();
+            args.RequestUri(&mut uri)?;
+            let uri = webview2_com::take_pwstr(uri);
+            // Internal appliances commonly use untrusted certificates. Limit the
+            // exception to this management origin; keep normal checks elsewhere.
+            if tauri::Url::parse(&uri).ok().is_some_and(|requested| requested.origin() == certificate_origin) {
+              args.SetAction(COREWEBVIEW2_SERVER_CERTIFICATE_ERROR_ACTION_ALWAYS_ALLOW)?;
+            }
+          }
+          Ok(())
+        },
+      ));
+      let mut certificate_event_token = 0;
+      if let Err(error) = webview_with_certificates.add_ServerCertificateErrorDetected(
+        &certificate_handler,
+        &mut certificate_event_token,
+      ) {
+        eprintln!("Failed to register WebView2 certificate handler: {error}");
+        return;
+      }
 
       let allowed_origin = url.origin();
       let auth_handler = BasicAuthenticationRequestedEventHandler::create(Box::new(
@@ -248,6 +285,7 @@ async fn open_proxy(
         &mut event_token,
       ) {
         eprintln!("Failed to register WebView2 authentication handler: {error}");
+        let _ = webview_with_certificates.remove_ServerCertificateErrorDetected(certificate_event_token);
         return;
       }
 
@@ -259,6 +297,7 @@ async fn open_proxy(
       if let Err(error) = core_webview.Navigate(PCWSTR::from_raw(url_wide.as_ptr())) {
         eprintln!("Failed to navigate proxy window: {error}");
         let _ = webview_with_auth.remove_BasicAuthenticationRequested(event_token);
+        let _ = webview_with_certificates.remove_ServerCertificateErrorDetected(certificate_event_token);
       }
     }
   })?;
