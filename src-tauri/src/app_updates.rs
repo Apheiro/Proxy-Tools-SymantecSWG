@@ -285,7 +285,9 @@ async fn verify_file(path: &Path, update: &AvailableUpdate) -> Result<(), String
     let mut hash = Sha256::new();
     let mut bytes = 0;
     let mut first = Vec::new();
-    let mut buffer = [0_u8; 65536];
+    // Keep this buffer out of the async future itself. Tauri's command bridge
+    // moves nested futures; an inline 64 KiB array needlessly increases stack use.
+    let mut buffer = vec![0_u8; 65536];
     loop {
         let count = file
             .read(&mut buffer)
@@ -312,14 +314,55 @@ impl Drop for DownloadGuard<'_> {
         self.0.store(false, Ordering::SeqCst);
     }
 }
+/// Best-effort, bounded diagnostics. Only fixed stage names and byte counts are recorded.
+/// No request URLs, authorization headers, tokens or release-note content enter this log.
+struct DownloadTrace {
+    path: PathBuf,
+}
+impl DownloadTrace {
+    fn new(root: &Path) -> Self {
+        Self {
+            path: root.join("updater.log"),
+        }
+    }
+    fn record(&self, stage: &str, bytes: u64) {
+        use std::io::Write;
+        // Retain at most two 256 KiB files across repeated update attempts.
+        if std::fs::metadata(&self.path).is_ok_and(|m| m.len() >= 256 * 1024) {
+            let previous = self.path.with_extension("previous.log");
+            let _ = std::fs::remove_file(&previous);
+            let _ = std::fs::rename(&self.path, previous);
+        }
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)
+        {
+            let _ = writeln!(
+                file,
+                "{} stage={stage} bytes={bytes}",
+                chrono::Utc::now().to_rfc3339()
+            );
+            let _ = file.sync_data();
+        }
+    }
+}
+fn trace_stage(trace: Option<&DownloadTrace>, stage: &str, bytes: u64) {
+    if let Some(trace) = trace {
+        trace.record(stage, bytes);
+    }
+}
 async fn save_download(
     mut response: Response,
     root: &Path,
     update: &AvailableUpdate,
+    trace: Option<&DownloadTrace>,
 ) -> Result<PathBuf, String> {
     let output = root.join(&update.filename);
     if output.exists() {
+        trace_stage(trace, "existing-file-verification-started", 0);
         verify_file(&output, update).await?;
+        trace_stage(trace, "existing-file-verification-complete", update.bytes);
         return Ok(output);
     }
     let partial = root.join(format!(
@@ -334,7 +377,9 @@ async fn save_download(
             .open(&partial)
             .await
             .map_err(|_| "Could not create the update download.")?;
+        trace_stage(trace, "partial-file-created", 0);
         let mut bytes = 0_u64;
+        let mut checkpoint = 0_u64;
         while let Some(chunk) = response
             .chunk()
             .await
@@ -347,6 +392,10 @@ async fn save_download(
             file.write_all(&chunk)
                 .await
                 .map_err(|_| "Could not save the update download.")?;
+            if checkpoint == 0 || bytes.saturating_sub(checkpoint) >= 8 * 1024 * 1024 {
+                trace_stage(trace, "download-progress", bytes);
+                checkpoint = bytes;
+            }
         }
         file.flush()
             .await
@@ -355,14 +404,19 @@ async fn save_download(
             .await
             .map_err(|_| "Could not finish the update download.")?;
         drop(file);
+        trace_stage(trace, "download-complete", bytes);
+        trace_stage(trace, "verification-started", bytes);
         verify_file(&partial, update).await?;
+        trace_stage(trace, "verification-complete", bytes);
         // Preserve existing complete downloads; never overwrite a running executable.
         if output.exists() {
             return Err("An update file already exists. Move it before retrying.".into());
         }
+        trace_stage(trace, "publish-started", bytes);
         tokio::fs::rename(&partial, &output)
             .await
             .map_err(|_| "Could not finalize the update download.")?;
+        trace_stage(trace, "publish-complete", bytes);
         Ok(output)
     }
     .await;
@@ -401,30 +455,50 @@ pub async fn download_app_update(
     .clone()
     .filter(|value| value.id == release_id)
     .ok_or("Update information changed. Check for updates again.")?;
-    let token = token_for(mocked, mock_token)?;
     let root = directory(&app)?;
-    let output = root.join(&update.filename);
-    let path = if output.exists() {
-        verify_file(&output, &update).await?;
-        output
-    } else {
-        let client = client()?;
-        let response = asset_response(
-            &client,
-            &format!("{REPOSITORY}/releases/assets/{}", update.asset_id),
-            token.as_deref(),
-        )
-        .await?;
-        save_download(response, &root, &update).await?
-    };
-    Ok(DownloadedUpdate {
-        filename: update.filename,
-        path: path.display().to_string(),
-        current_executable: std::env::current_exe()
-            .map_err(|_| "Could not locate the running executable.")?
-            .display()
-            .to_string(),
-    })
+    let trace = DownloadTrace::new(&root);
+    trace.record("download-request-received", 0);
+    let result = async {
+        trace.record("credentials-read-started", 0);
+        let token = token_for(mocked, mock_token)?;
+        trace.record("credentials-read-complete", 0);
+        let output = root.join(&update.filename);
+        let path = if output.exists() {
+            trace.record("existing-file-verification-started", 0);
+            verify_file(&output, &update).await?;
+            trace.record("existing-file-verification-complete", update.bytes);
+            output
+        } else {
+            let client = client()?;
+            trace.record("asset-request-started", 0);
+            let response = asset_response(
+                &client,
+                &format!("{REPOSITORY}/releases/assets/{}", update.asset_id),
+                token.as_deref(),
+            )
+            .await?;
+            trace.record("asset-response-received", 0);
+            save_download(response, &root, &update, Some(&trace)).await?
+        };
+        Ok(DownloadedUpdate {
+            filename: update.filename,
+            path: path.display().to_string(),
+            current_executable: std::env::current_exe()
+                .map_err(|_| "Could not locate the running executable.")?
+                .display()
+                .to_string(),
+        })
+    }
+    .await;
+    trace.record(
+        if result.is_ok() {
+            "download-ready"
+        } else {
+            "download-failed"
+        },
+        0,
+    );
+    result
 }
 #[tauri::command]
 pub async fn open_update_folder(app: AppHandle) -> Result<(), String> {

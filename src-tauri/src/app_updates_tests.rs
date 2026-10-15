@@ -122,16 +122,32 @@ async fn downloads_stream_verify_and_publish_complete_executables_only() {
     tokio::fs::create_dir_all(&root).await.unwrap();
     let payload = [b"MZ".as_slice(), &vec![42; 2_000_000]].concat();
     let update = select_update(fixture(&payload), "0.9.0").unwrap().unwrap();
-    let path = save_download(
+    let trace = DownloadTrace::new(&root);
+    let task = save_download(
         response(payload.clone(), payload.len()).await,
         &root,
         &update,
-    )
-    .await
-    .unwrap();
+        Some(&trace),
+    );
+    assert!(
+        std::mem::size_of_val(&task) < 16 * 1024,
+        "download task must remain small"
+    );
+    let path = task.await.unwrap();
+    let stages = std::fs::read_to_string(root.join("updater.log")).unwrap();
+    for stage in [
+        "partial-file-created",
+        "download-complete",
+        "verification-started",
+        "verification-complete",
+        "publish-complete",
+    ] {
+        assert!(stages.contains(stage), "missing diagnostic stage: {stage}");
+    }
+    assert!(!stages.contains("127.0.0.1"));
     assert_eq!(tokio::fs::read(&path).await.unwrap(), payload);
     verify_file(&path, &update).await.unwrap();
-    assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+    assert_eq!(std::fs::read_dir(&root).unwrap().count(), 2);
     tokio::fs::write(&path, b"MZ tampered").await.unwrap();
     assert!(verify_file(&path, &update).await.is_err());
     tokio::fs::remove_dir_all(root).await.unwrap();
@@ -143,19 +159,57 @@ async fn corrupt_and_interrupted_downloads_remove_partial_files() {
     let original = b"MZ original executable";
     let update = select_update(fixture(original), "0.9.0").unwrap().unwrap();
     let corrupt = vec![b'X'; original.len()];
-    assert!(
-        save_download(response(corrupt, original.len()).await, &root, &update)
-            .await
-            .is_err()
-    );
+    assert!(save_download(
+        response(corrupt, original.len()).await,
+        &root,
+        &update,
+        None
+    )
+    .await
+    .is_err());
     assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
     assert!(save_download(
         response(b"MZ".to_vec(), original.len()).await,
         &root,
-        &update
+        &update,
+        None,
     )
     .await
     .is_err());
     assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
     tokio::fs::remove_dir_all(root).await.unwrap();
+}
+
+#[test]
+fn verification_future_keeps_large_io_buffers_off_the_task_stack() {
+    let update = select_update(fixture(b"MZ fixture"), "0.9.0")
+        .unwrap()
+        .unwrap();
+    let future = verify_file(Path::new("unused-test-path"), &update);
+    let bytes = std::mem::size_of_val(&future);
+    assert!(
+        bytes < 16 * 1024,
+        "verification future occupies {bytes} bytes"
+    );
+}
+
+#[test]
+fn update_trace_records_only_stages_and_keeps_bounded_files() {
+    let root = std::env::temp_dir().join(crate::backup_store::new_id("update-trace-test"));
+    std::fs::create_dir_all(&root).unwrap();
+    let trace = DownloadTrace::new(&root);
+    trace.record("download-request-received", 0);
+    trace.record("verification-started", 1234);
+    let text = std::fs::read_to_string(root.join("updater.log")).unwrap();
+    assert!(text.contains("stage=verification-started bytes=1234"));
+    std::fs::write(root.join("updater.log"), vec![b'x'; 256 * 1024]).unwrap();
+    trace.record("download-ready", 1234);
+    assert!(std::fs::metadata(root.join("updater.log")).unwrap().len() < 1024);
+    assert_eq!(
+        std::fs::metadata(root.join("updater.previous.log"))
+            .unwrap()
+            .len(),
+        256 * 1024
+    );
+    std::fs::remove_dir_all(root).unwrap();
 }

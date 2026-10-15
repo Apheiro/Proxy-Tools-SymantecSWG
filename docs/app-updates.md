@@ -28,6 +28,12 @@ SHA-256 checks integrity against GitHub's release metadata; this does not add an
 
 The application identifier remains `com.apheiros.proxytools`. Storage uses Tauri's existing default paths. There is no identifier migration, custom base directory, version bump or change to the proxy credential target.
 
+## Windows crash diagnostics
+
+Windows exception `0xC00000FD` indicates stack overflow. Verification uses a heap-allocated streaming buffer so the asynchronous task does not embed a 64 KiB array. A regression test limits the size of this future; this reduces stack pressure without removing size, executable-header or SHA-256 checks. The complete fix still needs confirmation on the affected Windows build.
+
+Download attempts write fixed stage names, UTC timestamps and byte counts to `app_cache_dir()/updates/updater.log`. The previous log is kept as `updater.previous.log`; rotation occurs around 256 KiB. Logging is best-effort and never records tokens, headers, signed download URLs or release notes. The final recorded stage helps locate a native crash, but a hard process termination may prevent a final entry.
+
 ## Validation
 
 - Native tests cover semantic comparisons, stable/completed asset selection, optional authentication, rejected token/header input, destination validation, multi-megabyte download integrity and partial-file cleanup after corruption or interruption.
