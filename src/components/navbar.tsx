@@ -105,7 +105,12 @@
 
 import { BookOpen, ChevronLeft } from 'lucide-react';
 import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
+import {
+  usePathname,
+  useRouter,
+  useSearchParams,
+} from 'next/navigation';
+import { Suspense } from 'react';
 import { Button } from '@/components/ui/button';
 import ConfigMenu from './configmenu';
 
@@ -119,8 +124,17 @@ const LABELS: Record<string, string> = {
 };
 
 export default function Navbar() {
+  return (
+    <Suspense>
+      <NavbarContent />
+    </Suspense>
+  );
+}
+
+function NavbarContent() {
   const pathname = usePathname();
   const router = useRouter();
+  const proxy = useSearchParams().get('proxy');
 
   const segments = pathname.split('/').filter(Boolean);
 
@@ -135,7 +149,11 @@ export default function Navbar() {
         segment
           .replace(/-/g, ' ')
           .replace(/\b\w/g, (c) => c.toUpperCase()),
-      href: `/${segments.slice(0, index + 1).join('/')}`,
+      href: `/${segments.slice(0, index + 1).join('/')}${
+        segments[0] === 'Diagnostics' && proxy
+          ? `?${new URLSearchParams({ proxy })}`
+          : ''
+      }`,
     })),
   ];
 
