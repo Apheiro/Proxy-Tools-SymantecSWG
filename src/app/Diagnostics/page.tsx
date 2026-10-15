@@ -15,6 +15,7 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
+import PageHeader from '@/components/pageHeader';
 import BackgroundRefresh from '@/components/backgroundRefresh';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -27,6 +28,18 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import getCredentials from '@/lib/getCredentials';
 import { useScrapedData } from '@/lib/scrapingCache';
 import useDataSourceMode from '@/lib/useDataSourceMode';
+import { cva } from '@/lib/cva';
+import { refreshStyles } from '@/lib/uiVariants';
+
+const policyFileStyles = cva({
+  base: 'flex min-w-0 items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors hover:bg-accent',
+  variants: {
+    selected: {
+      true: 'bg-accent font-medium text-accent-foreground',
+      false: 'text-muted-foreground',
+    },
+  },
+});
 
 export default function Page() {
   return (
@@ -112,8 +125,11 @@ function PageBase() {
   return (
     <main
       aria-busy={busy}
-      style={{ opacity: busy && htmlData ? 0.96 : 1 }}
-      className='mx-auto flex min-h-dvh w-full max-w-7xl flex-col gap-8 px-4 py-6 md:px-6 transition-opacity duration-500'
+      className={refreshStyles({
+        refreshing: busy && !!htmlData,
+        className:
+          'mx-auto flex min-h-dvh w-full max-w-7xl flex-col gap-8 px-4 py-6 md:px-6',
+      })}
     >
       <BackgroundRefresh
         active={busy}
@@ -123,30 +139,24 @@ function PageBase() {
             : 'Loading policy and trace data…'
         }
       />
-      <header className='flex flex-col gap-3 border-b pb-6 sm:flex-row sm:items-end sm:justify-between'>
-        <div className='flex flex-col gap-2'>
-          <div className='flex items-center gap-2 text-sm text-muted-foreground'>
-            <ShieldCheck className='size-4' />
-            Proxy diagnostics
-          </div>
-          <h1 className='text-2xl font-bold tracking-tight md:text-3xl'>
-            {proxy || 'No proxy selected'}
-          </h1>
-          <p className='text-sm text-muted-foreground'>
-            Browse policy files and open an available trace.
-          </p>
-        </div>
-        {loadStatus === 'loaded' && (
-          <div className='flex gap-2'>
-            <Badge variant='secondary'>
-              {htmlData?.traces.length ?? 0} traces
-            </Badge>
-            <Badge variant='secondary'>
-              {htmlData?.filesLink.length ?? 0} policy files
-            </Badge>
-          </div>
-        )}
-      </header>
+      <PageHeader
+        icon={ShieldCheck}
+        eyebrow='Proxy diagnostics'
+        title={proxy || 'No proxy selected'}
+        description='Browse policy files and open an available trace.'
+        actions={
+          loadStatus === 'loaded' && (
+            <div className='flex gap-2'>
+              <Badge variant='secondary'>
+                {htmlData?.traces.length ?? 0} traces
+              </Badge>
+              <Badge variant='secondary'>
+                {htmlData?.filesLink.length ?? 0} policy files
+              </Badge>
+            </div>
+          )
+        }
+      />
 
       <Link
         href={{
@@ -177,12 +187,24 @@ function PageBase() {
         </Card>
       </Link>
 
-      <Link href={{ pathname: '/Diagnostics/BackupManager', query: { proxy } }} className='group rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'>
+      <Link
+        href={{
+          pathname: '/Diagnostics/BackupManager',
+          query: { proxy },
+        }}
+        className='group rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+      >
         <Card className='gap-3 p-4 transition-colors group-hover:border-primary/50 group-hover:bg-accent/40'>
           <div className='flex items-center justify-between gap-4'>
             <div className='flex items-center gap-3'>
               <Archive className='size-5' />
-              <div><h2 className='font-semibold'>Backup Manager</h2><p className='mt-1 text-sm text-muted-foreground'>Create and browse appliance configuration backups over SSH.</p></div>
+              <div>
+                <h2 className='font-semibold'>Backup Manager</h2>
+                <p className='mt-1 text-sm text-muted-foreground'>
+                  Create and browse appliance configuration backups
+                  over SSH.
+                </p>
+              </div>
             </div>
             <ArrowUpRight className='size-4' />
           </div>
@@ -304,11 +326,10 @@ function PageBase() {
                         policyFileSelected?.name === file.name
                       }
                       onClick={() => setPolicyFileSelected(file)}
-                      className={`flex min-w-0 items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors hover:bg-accent ${
-                        policyFileSelected?.name === file.name
-                          ? 'bg-accent font-medium text-accent-foreground'
-                          : 'text-muted-foreground'
-                      }`}
+                      className={policyFileStyles({
+                        selected:
+                          policyFileSelected?.name === file.name,
+                      })}
                     >
                       <FileText className='size-4 shrink-0' />
                       <span className='truncate'>{file.name}</span>

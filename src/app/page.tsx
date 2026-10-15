@@ -1,6 +1,7 @@
 /** biome-ignore-all lint/style/useNamingConvention: <> */
 /** biome-ignore-all lint/performance/noImgElement: <> */
 'use client';
+import PageHeader from '@/components/pageHeader';
 import { useForm } from '@mantine/form';
 import { invoke } from '@tauri-apps/api/core';
 import { some } from 'lodash-es';
@@ -334,20 +335,12 @@ export default function Page() {
     return (
       <main className='mx-auto flex min-h-dvh w-full max-w-7xl flex-col gap-6 px-4 py-6 md:px-6'>
         {workspaceToggle}
-        <header className='flex flex-col gap-2 border-b pb-5'>
-          <div className='flex items-center gap-2 text-sm text-muted-foreground'>
-            <FileCode2 className='size-4' />
-            PAC/WPAD file workspace
-          </div>
-          <h1 className='text-2xl font-bold tracking-tight md:text-3xl'>
-            PAC File Manager Workspace
-          </h1>
-          <p className='max-w-2xl text-sm text-muted-foreground'>
-            Manage PAC sources here. Open an existing source or create
-            one from scratch to edit routing rules in its dedicated
-            workspace. Proxy destinations use the registered inventory.
-          </p>
-        </header>
+        <PageHeader
+          icon={FileCode2}
+          eyebrow='PAC/WPAD file workspace'
+          title='PAC File Manager Workspace'
+          description='Manage PAC sources here. Open an existing source or create one from scratch to edit routing rules in its dedicated workspace. Proxy destinations use the registered inventory.'
+        />
         <PacFileManagerWorkspace proxies={proxies} />
       </main>
     );
@@ -356,40 +349,34 @@ export default function Page() {
   return (
     <main className='mx-auto flex min-h-dvh w-full max-w-7xl flex-col gap-8 px-4 py-6 md:px-6'>
       {workspaceToggle}
-      <header className='flex flex-col gap-5 border-b pb-6 md:flex-row md:items-end md:justify-between'>
-        <div className='flex flex-col gap-2'>
-          <div className='flex items-center gap-2 text-sm text-muted-foreground'>
-            <ShieldCheck className='size-4' />
-            Proxy management
+      <PageHeader
+        icon={ShieldCheck}
+        eyebrow='Proxy management'
+        title='Proxy workspace'
+        description='Add a proxy, check its reachability, and open its diagnostic tools.'
+        actions={
+          <div className='grid grid-cols-2 gap-2 sm:min-w-64'>
+            <div className='rounded-lg border bg-card px-4 py-3'>
+              <p className='text-xs text-muted-foreground'>
+                Configured
+              </p>
+              <p className='mt-1 flex items-center gap-2 text-xl font-semibold'>
+                <Server className='size-4 text-muted-foreground' />
+                {proxies.length}
+              </p>
+            </div>
+            <div className='rounded-lg border bg-card px-4 py-3'>
+              <p className='text-xs text-muted-foreground'>
+                Reachable
+              </p>
+              <p className='mt-1 flex items-center gap-2 text-xl font-semibold'>
+                <Activity className='size-4 text-green-500' />
+                {activeCount}
+              </p>
+            </div>
           </div>
-          <h1 className='text-2xl font-bold tracking-tight md:text-3xl'>
-            Proxy workspace
-          </h1>
-          <p className='max-w-xl text-sm text-muted-foreground'>
-            Add a proxy, check its reachability, and open its
-            diagnostic tools.
-          </p>
-        </div>
-
-        <div className='grid grid-cols-2 gap-2 sm:min-w-64'>
-          <div className='rounded-lg border bg-card px-4 py-3'>
-            <p className='text-xs text-muted-foreground'>
-              Configured
-            </p>
-            <p className='mt-1 flex items-center gap-2 text-xl font-semibold'>
-              <Server className='size-4 text-muted-foreground' />
-              {proxies.length}
-            </p>
-          </div>
-          <div className='rounded-lg border bg-card px-4 py-3'>
-            <p className='text-xs text-muted-foreground'>Reachable</p>
-            <p className='mt-1 flex items-center gap-2 text-xl font-semibold'>
-              <Activity className='size-4 text-green-500' />
-              {activeCount}
-            </p>
-          </div>
-        </div>
-      </header>
+        }
+      />
 
       <section aria-labelledby='add-proxy-title'>
         <Card className='relative overflow-hidden'>

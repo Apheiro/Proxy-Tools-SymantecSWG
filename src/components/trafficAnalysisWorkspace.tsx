@@ -4,7 +4,6 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import {
   Activity,
-  ArrowLeft,
   BookOpen,
   ChevronDown,
   CircleAlert,
@@ -24,21 +23,27 @@ import {
   useState,
 } from 'react';
 import { toast } from 'sonner';
+import { cva } from '@/lib/cva';
+import {
+  disclosureIconStyles,
+  refreshStyles,
+} from '@/lib/uiVariants';
+import PageHeader from '@/components/pageHeader';
 import BackgroundRefresh from '@/components/backgroundRefresh';
 import TrafficTimeline from '@/components/trafficTimeline';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { DateTimePicker } from '@/components/ui/date-time-picker';
-import { dateTimeToISO, isoToDateTime } from '@/lib/dateTime';
 import {
   Card,
   CardContent,
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
+import { DateTimePicker } from '@/components/ui/date-time-picker';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { SelectField, SelectOption } from '@/components/ui/select';
 import { useCredentialRevision } from '@/lib/credentialStore';
+import { dateTimeToISO, isoToDateTime } from '@/lib/dateTime';
 import getCredentials from '@/lib/getCredentials';
 import { useScrapedData } from '@/lib/scrapingCache';
 import {
@@ -63,6 +68,16 @@ import {
 } from '@/lib/trafficCapture';
 import useDataSourceMode from '@/lib/useDataSourceMode';
 import useTrafficCapture from '@/lib/useTrafficCapture';
+
+const workspaceTabStyles = cva({
+  base: 'whitespace-nowrap border-b-2 px-4 py-2 text-sm font-medium',
+  variants: {
+    selected: {
+      true: 'border-primary text-primary',
+      false: 'border-transparent text-muted-foreground',
+    },
+  },
+});
 
 const INPUT =
   'h-9 min-w-0 rounded-md border bg-background px-2 text-sm';
@@ -475,13 +490,12 @@ export default function TrafficAnalysisWorkspace({
 
   return (
     <main
-      style={{
-        opacity:
-          (indexBusy || analysisLoading) && (sources || analysis)
-            ? 0.96
-            : 1,
-      }}
-      className='mx-auto flex h-[calc(100dvh-53px)] max-w-[1600px] flex-col gap-4 overflow-hidden px-4 py-5 md:px-7 transition-opacity duration-500'
+      className={refreshStyles({
+        refreshing:
+          (indexBusy || analysisLoading) && !!(sources || analysis),
+        className:
+          'mx-auto flex h-[calc(100dvh-90px)] max-w-[1600px] flex-col gap-4 overflow-hidden px-4 py-5 md:px-7',
+      })}
     >
       <BackgroundRefresh
         active={indexBusy || analysisLoading}
@@ -493,75 +507,69 @@ export default function TrafficAnalysisWorkspace({
               : 'Refreshing traffic analysis…'
         }
       />
-      <header className='flex shrink-0 flex-wrap items-center justify-between gap-3 border-b pb-4'>
-        <div>
-          <Link
-            className='mb-2 inline-flex items-center gap-1 text-sm text-muted-foreground'
-            href={{ pathname: '/Diagnostics', query: { proxy } }}
-          >
-            <ArrowLeft className='size-4' />
-            Proxy diagnostics
-          </Link>
-          <h1 className='flex items-center gap-2 text-2xl font-bold'>
-            <Activity className='text-primary' />
-            Traffic Analysis
-          </h1>
-          <p className='mt-1 text-sm text-muted-foreground'>
+      <PageHeader
+        icon={Activity}
+        eyebrow='Proxy diagnostics'
+        title='Traffic Analysis'
+        description={
+          <>
             {proxy || 'No proxy selected'} · Complete capture
             analytics
-          </p>
-        </div>
-        <div className='flex flex-wrap items-center gap-2'>
-          <Link href='/documentation/traffic-analysis'>
-            <Button variant='ghost' size='sm'>
-              <BookOpen className='size-4' />
-              Guide
+          </>
+        }
+        actions={
+          <div className='flex flex-wrap items-center gap-2'>
+            <Link href='/documentation/traffic-analysis'>
+              <Button variant='ghost' size='sm'>
+                <BookOpen className='size-4' />
+                Guide
+              </Button>
+            </Link>
+            <Button
+              size='sm'
+              variant={mode === 'static' ? 'default' : 'outline'}
+              disabled={capture.busy}
+              onClick={() => {
+                if (mode !== 'static') {
+                  capture.setDataset(null);
+                  setMode('static');
+                  setStream(null);
+                }
+              }}
+            >
+              <FileUp className='size-4' />
+              Static Log
             </Button>
-          </Link>
-          <Button
-            size='sm'
-            variant={mode === 'static' ? 'default' : 'outline'}
-            disabled={capture.busy}
-            onClick={() => {
-              if (mode !== 'static') {
-                capture.setDataset(null);
-                setMode('static');
-                setStream(null);
+            <Button
+              size='sm'
+              variant={mode === 'live' ? 'default' : 'outline'}
+              disabled={capture.busy}
+              onClick={() => {
+                void capture
+                  .discard()
+                  .catch((error) => toast.error(String(error)));
+                setMode('live');
+              }}
+            >
+              <Radio className='size-4' />
+              Live Session
+            </Button>
+            <Button
+              size='sm'
+              variant='outline'
+              disabled={!saveable}
+              onClick={() =>
+                void capture.save(captureId).then((success) => {
+                  if (success) setSavedId(captureId);
+                })
               }
-            }}
-          >
-            <FileUp className='size-4' />
-            Static Log
-          </Button>
-          <Button
-            size='sm'
-            variant={mode === 'live' ? 'default' : 'outline'}
-            disabled={capture.busy}
-            onClick={() => {
-              void capture
-                .discard()
-                .catch((error) => toast.error(String(error)));
-              setMode('live');
-            }}
-          >
-            <Radio className='size-4' />
-            Live Session
-          </Button>
-          <Button
-            size='sm'
-            variant='outline'
-            disabled={!saveable}
-            onClick={() =>
-              void capture.save(captureId).then((success) => {
-                if (success) setSavedId(captureId);
-              })
-            }
-          >
-            <Save className='size-4' />
-            Save capture
-          </Button>
-        </div>
-      </header>
+            >
+              <Save className='size-4' />
+              Save capture
+            </Button>
+          </div>
+        }
+      />
       <div className='grid shrink-0 gap-3 lg:grid-cols-[minmax(0,1fr)_auto]'>
         <Card
           className='shrink-0 flex-row flex-wrap items-center gap-2 p-3'
@@ -798,7 +806,7 @@ export default function TrafficAnalysisWorkspace({
             key={name}
             type='button'
             onClick={() => setTab(name)}
-            className={`whitespace-nowrap border-b-2 px-4 py-2 text-sm font-medium ${tab === name ? 'border-primary text-primary' : 'border-transparent text-muted-foreground'}`}
+            className={workspaceTabStyles({ selected: tab === name })}
           >
             {name}
           </button>
@@ -957,7 +965,10 @@ export default function TrafficAnalysisWorkspace({
                     >
                       Range
                       <ChevronDown
-                        className={`size-4 transition-transform ${rangeOpen ? 'rotate-180' : ''}`}
+                        className={disclosureIconStyles({
+                          expanded: rangeOpen,
+                          className: 'size-4',
+                        })}
                       />
                     </Button>
                   </div>
@@ -984,7 +995,10 @@ export default function TrafficAnalysisWorkspace({
                       ? `(${Object.values(filters).filter(Boolean).length})`
                       : ''}
                     <ChevronDown
-                      className={`size-4 transition-transform ${filtersOpen ? 'rotate-180' : ''}`}
+                      className={disclosureIconStyles({
+                        expanded: filtersOpen,
+                        className: 'size-4',
+                      })}
                     />
                   </CardTitle>
                   <Button

@@ -1,6 +1,7 @@
 /** biome-ignore-all lint/correctness/useUniqueElementIds: <> */
 /** biome-ignore-all lint/style/useNamingConvention: <> */
 'use client';
+import PageHeader from '@/components/pageHeader';
 import { useAutoAnimate } from '@formkit/auto-animate/react';
 import {
   useDebouncedValue,
@@ -242,26 +243,17 @@ function PageBase() {
 
   return (
     <main className='mx-auto flex min-h-dvh w-full max-w-7xl flex-col gap-6 px-4 py-6 md:px-6'>
-      <header className='flex flex-col gap-5 border-b pb-6 lg:flex-row lg:items-end lg:justify-between'>
-        <div className='flex flex-col gap-2'>
-          <div className='flex items-center gap-2 text-sm text-muted-foreground'>
-            <Activity className='size-4' />
-            Trace analysis
-          </div>
-          <h1 className='text-2xl font-bold tracking-tight md:text-3xl'>
-            {traceName || 'Live transactions'}
-          </h1>
-          <p className='text-sm text-muted-foreground'>
-            {proxy ? `Proxy ${proxy}` : 'Proxy trace'}
-            {' · '}Incoming transactions from this trace appear below.
-          </p>
-        </div>
-        <div className='flex flex-wrap items-center gap-2'>
+      <PageHeader
+        icon={Activity}
+        eyebrow='Trace analysis'
+        title={traceName || 'Live transactions'}
+        description={`${proxy ? `Proxy ${proxy}` : 'Proxy trace'} · Processing stages and policy evidence for each transaction.`}
+        actions={
           <Badge variant='secondary'>
             {traceUrl ? 'Trace selected' : 'No trace selected'}
           </Badge>
-        </div>
-      </header>
+        }
+      />
 
       <section
         className='grid grid-cols-1 gap-3 sm:grid-cols-3'

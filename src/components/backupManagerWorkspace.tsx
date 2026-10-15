@@ -32,6 +32,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import PageHeader from '@/components/pageHeader';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -53,6 +54,17 @@ import { useCredentialRevision } from '@/lib/credentialStore';
 import getCredentials from '@/lib/getCredentials';
 import useDataSourceMode from '@/lib/useDataSourceMode';
 import { getLocalStorage } from '@/lib/utilsClient';
+import { cva } from '@/lib/cva';
+
+const backupEntryStyles = cva({
+  base: 'flex min-w-0 items-center gap-1 rounded-lg border transition-colors',
+  variants: {
+    selected: {
+      true: 'border-primary/30 bg-accent',
+      false: 'border-transparent hover:bg-accent/50',
+    },
+  },
+});
 
 function BackupPreview({ content }: { content: string }) {
   const container = useRef<HTMLDivElement>(null);
@@ -109,9 +121,7 @@ function BackupEntry({
   deleting: boolean;
 }) {
   return (
-    <div
-      className={`flex min-w-0 items-center gap-1 rounded-lg border transition-colors ${selected ? 'border-primary/30 bg-accent' : 'border-transparent hover:bg-accent/50'}`}
-    >
+    <div className={backupEntryStyles({ selected })}>
       <button
         type='button'
         aria-pressed={selected}
@@ -359,24 +369,17 @@ export default function BackupManagerWorkspace({
 
   return (
     <main className='mx-auto flex w-full max-w-screen-2xl flex-col gap-4 p-4 md:p-5'>
-      <header className='flex flex-wrap items-center justify-between gap-3'>
-        <div className='flex min-w-0 items-center gap-3'>
-          <span className='flex size-10 shrink-0 items-center justify-center rounded-xl bg-muted'>
-            <Archive className='size-5' />
-          </span>
-          <div className='min-w-0'>
-            <h1 className='text-xl font-semibold tracking-tight md:text-2xl'>
-              Backup Manager
-            </h1>
-            <p className='mt-1 truncate text-sm text-muted-foreground'>
-              {appliance} · Configuration backups
-            </p>
-          </div>
-        </div>
-        <Badge variant='outline'>
-          {source === 'mock' ? 'Mocked Data' : 'Live'}
-        </Badge>
-      </header>
+      <PageHeader
+        icon={Archive}
+        eyebrow='Appliance backups'
+        title='Backup Manager'
+        description={<>{appliance} · Configuration backups</>}
+        actions={
+          <Badge variant='outline'>
+            {source === 'mock' ? 'Mocked Data' : 'Live'}
+          </Badge>
+        }
+      />
       {!desktop && (
         <output className='rounded-lg border bg-muted/40 px-4 py-3 text-sm text-muted-foreground'>
           SSH backups are available in the desktop application.
