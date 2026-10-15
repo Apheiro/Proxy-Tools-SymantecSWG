@@ -34,6 +34,14 @@ export const documentationTopics: Record<DocumentationSlug, Topic> = {
         ],
       },
       {
+        id: 'tags',
+        title: 'Tags and grouping',
+        paragraphs: [
+          'Use Edit tags in any proxy’s actions menu to create your own labels, assign existing labels or remove them. Tags are saved with the inventory and survive reachability checks. Names are trimmed and compared without case distinctions to avoid duplicate labels.',
+          'Choose Group by → Tags to separate the inventory into named sections and an Untagged section. A proxy with multiple tags appears in each matching section. Show tag can restrict the inventory to one section. Grouping and the selected tag persist on this device; No grouping restores the flat inventory.',
+        ],
+      },
+      {
         id: 'tools',
         title: 'Appliance actions',
         rows: [
@@ -43,7 +51,7 @@ export const documentationTopics: Record<DocumentationSlug, Topic> = {
           ],
           [
             'Management console',
-            'Open a separate WebView window. Windows WebView2 responds to HTTP Basic authentication challenges with the application credentials; credentials are not embedded in the URL. WebView certificate behavior is separate from Rust HTTP clients.',
+            'Open a separate WebView window. Windows WebView2 responds to HTTP Basic authentication challenges with the application credentials; credentials are not embedded in the URL. Windows WebView2 automatically accepts certificate errors for the initial management HTTPS origin. Other origins retain normal certificate validation; this is separate from Rust HTTP clients.',
           ],
         ],
       },
@@ -118,7 +126,7 @@ export const documentationTopics: Record<DocumentationSlug, Topic> = {
         rows: [
           [
             'Transaction / verdict',
-            'A parsed request and its reported evaluation outcome. Search and filters, including multiple verdicts, restrict the displayed transactions.',
+            'Each record is a processing transaction, not necessarily a complete connection. The reported verdict is preserved and takes precedence over matched rules. If absent, only explicit matched actions are shown as inferred evidence; otherwise the result is Not reported. Missing checkpoints never mean unreachable. ALLOWED (handed off), CONNECT and TLS interception decisions do not prove network delivery.',
           ],
           [
             'Layers and Matches',
@@ -129,8 +137,8 @@ export const documentationTopics: Record<DocumentationSlug, Topic> = {
             'Reported checks that did not match. The button on the Matches heading collapses or shows misses globally without deleting data or changing evaluation.',
           ],
           [
-            'More',
-            'Open expanded transaction details: available connection, identity, application, categories, timing and policy information. Missing fields remain absent rather than fabricated.',
+            'Details',
+            'Open expanded transaction details, the exact original raw block, policy rules and every recorded checkpoint for this processing type. Null checkpoints are omitted and zero-millisecond measurements remain visible. No client-out stage is invented.',
           ],
         ],
       },
@@ -138,6 +146,9 @@ export const documentationTopics: Record<DocumentationSlug, Topic> = {
         id: 'scope',
         title: 'Scope',
         paragraphs: [
+          'Explicit handoff IDs connect only unambiguous captured transactions; references outside the capture are labeled as missing and no relationship is inferred from adjacency or a matching URL. UTC timestamps are parsed explicitly and displayed in UTC; custom filter inputs use local time. Missing or invalid timestamps are labeled Not recorded and excluded from time-range filtering.',
+          'Group by → Related flow keeps transactions connected by explicit handoff references together. Groups and their member transactions sort by their latest recorded activity first. Equal timestamps show the latest processing stage first, while missing timestamps appear last. Explicit handoff relationships and hierarchy are preserved independently of display order. First record and Last record show the captured timestamp range, not proof of connection creation or closure. Missing parents are labeled as uncaptured references, and ambiguous or cyclic references are identified without fabricating an origin. Grouping persists on this device; each flow can be collapsed independently. Filters show only matching records while preserving their full-capture group and total outcome counts.',
+          'The transaction list uses TanStack Virtual with measured row heights for both flow headers and individual transactions; even a single large expanded flow remains virtualized. Search, verdict filters, totals and handoff lookup use all received records, including rows outside the rendered window. Raw and parsed records still consume memory proportional to capture size; virtualization limits DOM work, not the amount of retained trace data.',
           'Trace explains individual request processing. Traffic Analysis aggregates access log traffic; its request counts are not counts of policy layers or trace matches. The parser supports the trace formats observed by this project, not every possible SGOS trace format.',
         ],
       },
@@ -314,8 +325,15 @@ export const documentationTopics: Record<DocumentationSlug, Topic> = {
   settings: {
     title: 'Settings & connections',
     description:
-      'Source selection, credentials and the boundaries between desktop and remote activity.',
+      'Connection profiles, credentials, updates and appearance in a responsive settings dialog.',
     sections: [
+      {
+        id: 'overview',
+        title: 'Settings workspace',
+        paragraphs: [
+          'Open Settings from the navigation bar. Data source and Appearance & privacy are grouped together; Proxy credentials and Application updates have their own sections. The dialog uses two columns on larger screens and a single column on smaller screens, with scrolling content and a fixed header and footer. Save credentials and tokens in their respective sections; switches take effect immediately. Done, the close button or Escape closes the dialog.',
+        ],
+      },
       {
         id: 'mode',
         title: 'Mock and Live',
@@ -330,7 +348,7 @@ export const documentationTopics: Record<DocumentationSlug, Topic> = {
         paragraphs: [
           'Live username/password are stored in Windows Credential Manager as proxytools/management-credentials, protected for the current Windows user on this machine. In Mocked Data, saved credentials use the separate mock-management-credentials localStorage entry; mock startup, saving and deletion do not access the Windows vault. Switching modes selects separate credentials without copying live credentials to localStorage. At startup, legacy plaintext localStorage credentials are migrated only after a successful vault write, then removed; legacy temporary credentials are discarded. New temporary credentials stay in memory and are cleared on Home or process exit. If secure startup fails, Retry or continue without stored credentials; legacy plaintext is retained until migration succeeds. The UI holds credentials in memory for forms and passes them through Tauri IPC; they are never included in cache keys, logs or URLs. Persistent credential saving on other platforms is not implemented.',
           'Rust policy, trace, traffic and PAC HTTP clients accept untrusted TLS certificates in the current environment. Policy/trace/traffic share native connection pools and cookie jars, isolated by exact origin and credential identity. The manager retains at most 16 entries, evicts idle entries after 15 minutes when accessed, honors server cookie expiry and rejects redirects outside the selected origin. Basic Auth is sent preemptively on each live HTTP request: there is no separate login request, bearer token or refresh-token flow. HTTP 401 discards the rejected session client/cookie jar, suppresses the same origin/credential combination for 30 seconds, and stops Trace polling instead of repeatedly submitting rejected credentials; update credentials and reopen Trace to resume. Credential changes/deletion and source-mode switches clear the pool and scraping cache. PAC requests do not attach proxy credentials. Mock HTTP requests never carry management credentials. Backup Manager is an explicit exception: mocked SSH backups authenticate against 127.0.0.1:2222 using the saved credentials and run the local dummy CLI.',
-          'Management console windows use WebView2’s separate TLS behavior and native BasicAuthenticationRequested handling on Windows. Rust request settings do not override WebView certificate handling. The native challenge callback supplies credentials only to the initial HTTPS origin; close console windows to discard their separate browser authentication state.',
+          'Management console windows use native WebView2 ServerCertificateErrorDetected and BasicAuthenticationRequested handling on Windows. Certificate errors are automatically accepted for the initial HTTPS origin, without checking certificate fingerprints; other origins retain normal validation. Rust request settings do not override this separate WebView handling. The native authentication challenge callback supplies credentials only to the initial HTTPS origin; close console windows to discard their separate browser authentication state.',
         ],
       },
       {
