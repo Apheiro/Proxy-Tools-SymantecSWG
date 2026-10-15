@@ -1,11 +1,11 @@
 import { useForm } from '@mantine/form';
 import { invoke } from '@tauri-apps/api/core';
 import dayjs from 'dayjs';
-import { AlertCircle } from 'lucide-react';
+import { AlertCircle, MoreHorizontal, Tags } from 'lucide-react';
 import { valibotResolver } from 'mantine-form-valibot-resolver';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Fragment, useId, useState } from 'react';
+import { useId, useState } from 'react';
 import { toast } from 'sonner';
 import * as v from 'valibot';
 import {
@@ -39,6 +39,8 @@ import useDataSourceMode from '@/lib/useDataSourceMode';
 import { getLocalStorage } from '@/lib/utilsClient';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
+import ProxyTagsEditor from '@/components/proxyTagsEditor';
+import { normalizeProxyTags } from '@/lib/proxyTags';
 
 const credentialSchema = v.object({
   username: v.pipe(
@@ -134,11 +136,13 @@ function LoginRequiredDialog({
 
 function LogDialog({
   pingLog,
+  hostinfo,
   children,
   open,
   setOpen,
 }: {
   pingLog: string;
+  hostinfo: Hostinfo;
   children?: React.ReactNode;
   open: boolean;
   setOpen: (open: boolean) => void;
@@ -150,9 +154,27 @@ function LogDialog({
         <AlertDialogHeader>
           <AlertDialogTitle>Ping log</AlertDialogTitle>
           <AlertDialogDescription asChild>
-            <pre className='whitespace-pre-wrap break-words'>
-              {pingLog}
-            </pre>
+            <div className='max-h-[60dvh] space-y-4 overflow-y-auto text-left'>
+              <dl className='space-y-2 text-sm'>
+                <div>
+                  <dt className='font-medium'>DNS name</dt>
+                  <dd className='break-words'>
+                    {hostinfo.dnsname || 'Not available'}
+                  </dd>
+                </div>
+                <div>
+                  <dt className='font-medium'>
+                    Configured PTR DNS IPs
+                  </dt>
+                  <dd className='break-words'>
+                    {hostinfo.dnsip || 'Not available'}
+                  </dd>
+                </div>
+              </dl>
+              <pre className='whitespace-pre-wrap break-words'>
+                {pingLog}
+              </pre>
+            </div>
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
@@ -224,11 +246,16 @@ function Status({ status }: { status: boolean }) {
 export default function ProxyCard({
   proxy,
   deleteProxy,
+  availableTags,
+  onTagsChange,
 }: {
   proxy: Proxy;
   deleteProxy: (proxy: Proxy) => void;
+  availableTags: string[];
+  onTagsChange: (proxy: Proxy, tags: string[]) => void;
 }) {
   const [openLog, setOpenLog] = useState(false);
+  const [openTags, setOpenTags] = useState(false);
   const { mode, ready: modeReady } = useDataSourceMode();
   const [delAlert, setOpenAlert] = useState(false);
   const [openLogin, setOpenLogin] = useState(false);
@@ -277,11 +304,12 @@ export default function ProxyCard({
   };
 
   return (
-    <Card className='w-full h-fit'>
+    <Card className='h-fit w-full min-w-0 gap-4 py-4'>
       <LogDialog
         open={openLog}
         setOpen={setOpenLog}
         pingLog={proxy.pinglog}
+        hostinfo={proxy.hostinfo}
       />
       <DelAlert
         open={delAlert}
@@ -299,60 +327,30 @@ export default function ProxyCard({
             openProxy(pendingProxyUrl, credentials);
         }}
       />
-      <CardHeader className='flex flex-col'>
-        {proxy.hostinfo.ip.split(' ').length > 1 && (
-          <TooltipOne
-            content='There are multiple devices associated with this
-                hostname. We recommend you delete this entry and
-                generate a new one with the direct IP address.'
-          >
-            <Badge variant='destructive' className='h-7 self-end'>
-              <AlertCircle className='mr-2 h-4! w-5! stroke-3' />{' '}
-              Multiple devices detected
-            </Badge>
-          </TooltipOne>
-        )}
-        <p className='text-xs text-muted-foreground self-end'>
-          {dayjs(proxy.last_check).format('MM/DD/YYYY hh:mm:ss A')}
-        </p>
-        <CardTitle className='flex items-center gap-2'>
-          <span>{proxy.hostname}</span>
-          {reverseHostnameUnavailable && (
-            <TooltipOne
-              classNameContent='max-w-72'
-              content='The hostname could not be retrieved through reverse DNS lookup using a PTR record. The appliance remains identified by its IP address.'
-            >
-              <button
-                type='button'
-                aria-label='Hostname unavailable through reverse DNS (PTR) lookup'
-                className='inline-flex size-6 shrink-0 items-center justify-center rounded-sm text-amber-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:text-amber-400'
+      <CardHeader className='flex flex-row items-start justify-between gap-3 px-4'>
+        <div className='min-w-0 space-y-2'>
+          <CardTitle className='flex min-w-0 items-center gap-2 text-base leading-snug'>
+            <span className='min-w-0 break-all'>
+              {proxy.hostname}
+            </span>
+            {reverseHostnameUnavailable && (
+              <TooltipOne
+                classNameContent='max-w-72'
+                content='The hostname could not be retrieved through reverse DNS lookup using a PTR record. The appliance remains identified by its IP address.'
               >
-                <AlertCircle className='size-4' aria-hidden='true' />
-              </button>
-            </TooltipOne>
-          )}
-        </CardTitle>
-      </CardHeader>
-
-      <CardContent>
-        <p className='text-muted-foreground'>
-          IP:{' '}
-          {proxy.hostinfo.ip
-            .split(' ')
-            .filter((ip) => ip.trim() !== '')
-            .map((ip) => (
-              <Fragment key={ip}>
-                {ip.trim()} <br />
-              </Fragment>
-            ))}
-        </p>
-        <p className='text-muted-foreground'>
-          Dns Name: {proxy.hostinfo.dnsname}
-        </p>
-        <p className='text-muted-foreground'>
-          Configured PTR DNS IPs: {proxy.hostinfo.dnsip}
-        </p>
-        <div className='flex justify-between items-end'>
+                <button
+                  type='button'
+                  aria-label='Hostname unavailable through reverse DNS (PTR) lookup'
+                  className='inline-flex size-6 shrink-0 items-center justify-center rounded-sm text-amber-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:text-amber-400'
+                >
+                  <AlertCircle
+                    className='size-4'
+                    aria-hidden='true'
+                  />
+                </button>
+              </TooltipOne>
+            )}
+          </CardTitle>
           <TooltipOne
             content={
               proxy.active
@@ -364,60 +362,130 @@ export default function ProxyCard({
               <Status status={proxy.active} />
             </Badge>
           </TooltipOne>
+        </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant='ghost'
+              size='icon'
+              className='size-8 shrink-0'
+              aria-label={`Proxy actions for ${proxy.hostname}`}
+            >
+              <MoreHorizontal className='size-4' />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent>
+            <DropdownMenuItem onSelect={() => setOpenTags(true)}>
+              <Tags className='size-4' />
+              Edit tags
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => setOpenAlert(true)}
+              variant='destructive'
+            >
+              Delete
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => setOpenLog(true)}>
+              Ping log
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => {
+                openProxy(
+                  `https://${proxyAddress}:8082/Secure/Local/console/mc_vpm.html`,
+                );
+              }}
+            >
+              Open vpm (Early)
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => {
+                openProxy(`https://${proxyAddress}:8082/`);
+              }}
+            >
+              Open admin console (Early)
+            </DropdownMenuItem>
 
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant='ghost'>...</Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent>
-              <DropdownMenuItem
-                onClick={() => setOpenAlert(true)}
-                variant='destructive'
-              >
-                Delete
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setOpenLog(true)}>
-                Ping log
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() => {
-                  openProxy(
-                    `https://${proxyAddress}:8082/Secure/Local/console/mc_vpm.html`,
-                  );
+            <DropdownMenuItem asChild>
+              <Link
+                onNavigate={(e) => {
+                  if (!modeReady) {
+                    e.preventDefault();
+                    return;
+                  }
+                  if (mode === 'live' && !getCredentials()) {
+                    e.preventDefault();
+                    setOpenLogin(true);
+                  }
+                }}
+                href={{
+                  pathname: '/Diagnostics',
+                  query: { proxy: proxyAddress },
                 }}
               >
-                Open vpm (Early)
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() => {
-                  openProxy(`https://${proxyAddress}:8082/`);
-                }}
-              >
-                Open admin console (Early)
-              </DropdownMenuItem>
+                Diagnostic tools
+              </Link>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </CardHeader>
+      <CardContent className='space-y-3 px-4'>
+        <div className='rounded-lg bg-muted/50 px-3 py-2.5'>
+          <p className='mb-1 text-xs text-muted-foreground'>
+            IP address
+          </p>
+          <div className='font-mono text-sm'>
+            {proxy.hostinfo.ip
+              .split(/\s+/)
+              .filter(Boolean)
+              .map((ip) => (
+                <span key={ip} className='block break-all'>
+                  {ip}
+                </span>
+              ))}
+          </div>
+        </div>
+        {proxy.hostinfo.ip.split(' ').length > 1 && (
+          <TooltipOne
+            content='There are multiple devices associated with this
+                hostname. We recommend you delete this entry and
+                generate a new one with the direct IP address.'
+          >
+            <Badge
+              variant='destructive'
+              className='max-w-full whitespace-normal'
+            >
+              <AlertCircle className='mr-2 h-4! w-5! stroke-3' />{' '}
+              Multiple devices detected
+            </Badge>
+          </TooltipOne>
+        )}
 
-              <DropdownMenuItem asChild>
-                <Link
-                  onNavigate={(e) => {
-                    if (!modeReady) {
-                      e.preventDefault();
-                      return;
-                    }
-                    if (mode === 'live' && !getCredentials()) {
-                      e.preventDefault();
-                      setOpenLogin(true);
-                    }
-                  }}
-                  href={{
-                    pathname: '/Diagnostics',
-                    query: { proxy: proxyAddress },
-                  }}
-                >
-                  Diagnostic tools
-                </Link>
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+        {!!proxy.tags?.length && (
+          <div className='flex flex-wrap gap-1.5'>
+            {normalizeProxyTags(proxy.tags).map((tag) => (
+              <Badge
+                key={tag}
+                variant='secondary'
+                className='max-w-full whitespace-normal break-words'
+              >
+                {tag}
+              </Badge>
+            ))}
+          </div>
+        )}
+        <ProxyTagsEditor
+          tags={normalizeProxyTags(proxy.tags)}
+          availableTags={availableTags}
+          onChange={(tags) => onTagsChange(proxy, tags)}
+          open={openTags}
+          onOpenChange={setOpenTags}
+        />
+
+        <div className='flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t pt-3 text-xs text-muted-foreground'>
+          <span>Last checked</span>
+          <time dateTime={proxy.last_check}>
+            {dayjs(proxy.last_check).format('MM/DD/YYYY hh:mm:ss A')}
+          </time>
         </div>
       </CardContent>
     </Card>

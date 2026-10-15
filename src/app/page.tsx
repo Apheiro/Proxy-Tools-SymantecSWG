@@ -1,7 +1,6 @@
 /** biome-ignore-all lint/style/useNamingConvention: <> */
 /** biome-ignore-all lint/performance/noImgElement: <> */
 'use client';
-import PageHeader from '@/components/pageHeader';
 import { useForm } from '@mantine/form';
 import { invoke } from '@tauri-apps/api/core';
 import { some } from 'lodash-es';
@@ -9,7 +8,6 @@ import {
   Activity,
   FileCode2,
   Network,
-  Plus,
   RefreshCcw,
   Server,
   ShieldCheck,
@@ -18,8 +16,8 @@ import { valibotResolver } from 'mantine-form-valibot-resolver';
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import * as v from 'valibot';
-import DotField from '@/components/dots';
 import PacFileManagerWorkspace from '@/components/pacFileManagerWorkspace';
+import PageHeader from '@/components/pageHeader';
 import ProxyCard from '@/components/proxyCard';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -30,7 +28,16 @@ import {
   FormMessage,
 } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
+import { SelectField, SelectOption } from '@/components/ui/select';
 import getCredentials from '@/lib/getCredentials';
+import {
+  groupProxies,
+  inventoryProxyId,
+  inventoryTags,
+  normalizeProxyTags,
+  PROXY_GROUPING_KEY,
+  type ProxyGrouping,
+} from '@/lib/proxyTags';
 import {
   deleteLocalStorage,
   getLocalStorage,
@@ -156,6 +163,10 @@ export default function Page() {
     'proxy',
   );
   const [proxies, setProxies] = useState<Proxy[]>([]);
+  const [grouping, setGrouping] = useState<ProxyGrouping>({
+    groupBy: 'none',
+    tag: '',
+  });
   const [disable, setDisable] = useState(false);
   const [disableReCheck, setDisableReCheck] = useState(false);
 
@@ -164,6 +175,20 @@ export default function Page() {
     if (savedWorkspace === 'pac' || savedWorkspace === 'proxy')
       setWorkspace(savedWorkspace);
     const storedProxies: Proxy[] = getLocalStorage('proxies') || [];
+    const savedGrouping = getLocalStorage<ProxyGrouping>(
+      PROXY_GROUPING_KEY,
+    );
+    if (savedGrouping?.groupBy === 'tags') {
+      const tag =
+        typeof savedGrouping.tag === 'string'
+          ? savedGrouping.tag
+          : '';
+      const validTag = groupProxies(storedProxies, {
+        groupBy: 'tags',
+        tag: '',
+      }).some((group) => group.key === tag);
+      setGrouping({ groupBy: 'tags', tag: validTag ? tag : '' });
+    }
     const normalizedProxies = storedProxies.map((proxy) => {
       const recoveredHostname =
         knownProxyValue(proxy.hostname) ??
@@ -235,8 +260,19 @@ export default function Page() {
       }),
     )
       .then((result) => {
-        postLocalStorage('proxies', result);
-        setProxies(result);
+        setProxies((current) => {
+          const updated = current.map((proxy) => {
+            const index = proxies.findIndex(
+              (saved) =>
+                inventoryProxyId(saved) === inventoryProxyId(proxy),
+            );
+            return index < 0
+              ? proxy
+              : { ...result[index], tags: proxy.tags };
+          });
+          postLocalStorage('proxies', updated);
+          return updated;
+        });
         return result;
       })
       .finally(() => setDisableReCheck(false));
@@ -249,12 +285,42 @@ export default function Page() {
   };
 
   const deleteProxy = (proxyToDelete: Proxy) => {
-    const updatedProxies = proxies.filter(
-      (proxy) => proxy !== proxyToDelete,
-    );
-    postLocalStorage('proxies', updatedProxies);
-    setProxies(updatedProxies);
+    setProxies((current) => {
+      const updated = current.filter(
+        (proxy) =>
+          inventoryProxyId(proxy) !== inventoryProxyId(proxyToDelete),
+      );
+      postLocalStorage('proxies', updated);
+      return updated;
+    });
   };
+  const updateTags = (target: Proxy, tags: string[]) => {
+    setProxies((current) => {
+      const updated = current.map((proxy) =>
+        inventoryProxyId(proxy) === inventoryProxyId(target)
+          ? { ...proxy, tags: normalizeProxyTags(tags) }
+          : proxy,
+      );
+      postLocalStorage('proxies', updated);
+      return updated;
+    });
+  };
+  const changeGrouping = (next: ProxyGrouping) => {
+    setGrouping(next);
+    postLocalStorage(PROXY_GROUPING_KEY, next);
+  };
+  const allTags = inventoryTags(proxies);
+  const allGroups = groupProxies(proxies, {
+    groupBy: 'tags',
+    tag: '',
+  });
+  const activeGrouping = {
+    ...grouping,
+    tag: allGroups.some((group) => group.key === grouping.tag)
+      ? grouping.tag
+      : '',
+  };
+  const proxyGroups = groupProxies(proxies, activeGrouping);
   const addProxy = (hostname: string) => {
     setDisable(true);
     if (
@@ -277,8 +343,11 @@ export default function Page() {
         loading: `Checking ${hostname} proxy status...`,
         success: (result) => {
           setDisable(false);
-          postLocalStorage('proxies', [...proxies, result]);
-          setProxies([...proxies, result]);
+          setProxies((current) => {
+            const updated = [...current, result];
+            postLocalStorage('proxies', updated);
+            return updated;
+          });
           return 'Proxy added successfully.';
         },
         error: (e) => {
@@ -379,31 +448,19 @@ export default function Page() {
       />
 
       <section aria-labelledby='add-proxy-title'>
-        <Card className='relative overflow-hidden'>
-          <div className='pointer-events-none absolute inset-y-0 right-0 hidden w-1/2 overflow-hidden opacity-30 [mask-image:linear-gradient(to_left,black,transparent)] md:block'>
-            <DotField
-              width={700}
-              height={280}
-              density={14}
-              darkAreas={7}
-              maxDotSize={4}
-              minDotSize={2}
-              contrast={4}
-              seed={132}
-            />
-          </div>
-          <CardContent className='relative flex flex-col gap-5 p-5 md:flex-row md:items-center md:justify-between md:p-6'>
-            <div className='flex items-start gap-3'>
-              <span className='flex size-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary'>
-                <Plus className='size-5' />
-              </span>
+        <Card>
+          <CardContent className='flex flex-col gap-5 p-5 md:flex-row md:items-center md:justify-between md:p-6'>
+            <div className='min-w-0 md:max-w-md'>
               <div className='flex flex-col gap-1'>
-                <h2 id='add-proxy-title' className='font-semibold'>
+                <h2
+                  id='add-proxy-title'
+                  className='text-lg font-semibold'
+                >
                   Add a proxy
                 </h2>
                 <p className='max-w-lg text-sm text-muted-foreground'>
-                  Enter a hostname or IP address to check whether it
-                  is reachable from this device.
+                  Register an appliance by hostname or IP. Its
+                  reachability will be checked automatically.
                 </p>
               </div>
             </div>
@@ -412,7 +469,7 @@ export default function Page() {
               onSubmit={form.onSubmit((values) => {
                 addProxy(values.hostname);
               })}
-              className='flex w-full flex-col gap-2 sm:flex-row md:max-w-lg'
+              className='flex w-full flex-col gap-3 sm:flex-row sm:items-start md:max-w-lg'
             >
               <FormItem className='min-w-0 flex-1'>
                 <FormLabel htmlFor='proxy-hostname'>
@@ -428,10 +485,9 @@ export default function Page() {
                 )}
               </FormItem>
               <Button
-                size='sm'
                 type='submit'
                 disabled={disable}
-                className='sm:mt-7'
+                className='shrink-0 self-end'
               >
                 Add proxy
               </Button>
@@ -473,18 +529,91 @@ export default function Page() {
           </Button>
         </div>
 
-        {proxies.length > 0 ? (
-          <div className='grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3'>
-            {proxies.map((proxy) => (
-              <ProxyCard
-                key={
-                  proxy.registered_address ||
-                  proxy.primary_address ||
-                  proxy.hostname
+        {proxies.length > 0 && (
+          <div className='flex flex-wrap items-end gap-3 rounded-lg border bg-muted/30 p-3'>
+            <div className='flex min-w-40 flex-col gap-1.5'>
+              <label
+                htmlFor='proxy-group-by'
+                className='text-xs font-medium text-muted-foreground'
+              >
+                Group by
+              </label>
+              <SelectField
+                id='proxy-group-by'
+                value={grouping.groupBy}
+                onValueChange={(value) =>
+                  changeGrouping({
+                    groupBy: value === 'tags' ? 'tags' : 'none',
+                    tag: '',
+                  })
                 }
-                proxy={proxy}
-                deleteProxy={deleteProxy}
-              />
+              >
+                <SelectOption value='none'>No grouping</SelectOption>
+                <SelectOption value='tags'>Tags</SelectOption>
+              </SelectField>
+            </div>
+            {grouping.groupBy === 'tags' && (
+              <div className='flex min-w-40 flex-col gap-1.5'>
+                <label
+                  htmlFor='proxy-tag-filter'
+                  className='text-xs font-medium text-muted-foreground'
+                >
+                  Show tag
+                </label>
+                <SelectField
+                  id='proxy-tag-filter'
+                  value={activeGrouping.tag}
+                  onValueChange={(tag) =>
+                    changeGrouping({ groupBy: 'tags', tag })
+                  }
+                >
+                  <SelectOption value=''>All tags</SelectOption>
+                  {allGroups.map((group) => (
+                    <SelectOption key={group.key} value={group.key}>
+                      {group.label}
+                    </SelectOption>
+                  ))}
+                </SelectField>
+              </div>
+            )}
+            <p className='text-xs text-muted-foreground'>
+              Tags and grouping are saved on this device.
+              {grouping.groupBy === 'tags' &&
+                ' Proxies with multiple tags appear in each matching group.'}
+            </p>
+          </div>
+        )}
+
+        {proxies.length > 0 ? (
+          <div className='flex flex-col gap-6'>
+            {proxyGroups.map((group) => (
+              <section
+                key={group.key}
+                aria-label={group.label || 'All proxies'}
+                className='space-y-3'
+              >
+                {grouping.groupBy === 'tags' && (
+                  <div className='flex min-w-0 items-center gap-2 border-b pb-2'>
+                    <h3 className='min-w-0 break-words font-semibold'>
+                      {group.label}
+                    </h3>
+                    <Badge variant='secondary'>
+                      {group.proxies.length}
+                    </Badge>
+                  </div>
+                )}
+                <div className='grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3'>
+                  {group.proxies.map((proxy) => (
+                    <ProxyCard
+                      key={inventoryProxyId(proxy)}
+                      proxy={proxy}
+                      deleteProxy={deleteProxy}
+                      availableTags={allTags}
+                      onTagsChange={updateTags}
+                    />
+                  ))}
+                </div>
+              </section>
             ))}
           </div>
         ) : (

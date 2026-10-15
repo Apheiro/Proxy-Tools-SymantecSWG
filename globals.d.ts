@@ -18,6 +18,8 @@ declare interface Proxy {
   registered_address?: string;
   /** Stable address used for future checks; promoted from hostname to IP after resolution. */
   primary_address?: string;
+  /** User-defined inventory labels, independent of reachability results. */
+  tags?: string[];
 }
 
 declare interface Credentials {
