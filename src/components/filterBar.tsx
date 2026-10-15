@@ -34,8 +34,7 @@ const statusLabels: Record<string, string> = {
   allowed: 'Allowed',
   rejected: 'Rejected',
   exception: 'Exception',
-  unreached: 'Unreached',
-  unknown: 'Unknown',
+  unknown: 'Not reported / unclassified',
 };
 
 function withoutRange(filter: Filters | null): Filters | null {
@@ -142,20 +141,21 @@ export default function FilterBar({
   };
 
   return (
-    <div ref={parent} className='flex w-full flex-col gap-4'>
-      <div className='flex flex-col gap-3 lg:flex-row'>
-        <div className='relative min-w-0 flex-1'>
+    <div ref={parent} className='flex w-full flex-col gap-3'>
+      <div className='grid grid-cols-[minmax(0,1fr)_auto] gap-2 lg:flex'>
+        <div className='relative col-span-2 min-w-0 lg:flex-1'>
           <Search className='pointer-events-none absolute left-3 top-1/2 z-10 size-4 -translate-y-1/2 text-muted-foreground' />
           <Input
             type='search'
             aria-label='Search transactions'
             placeholder={`Search by ${searchBy === 'ip' ? 'client IP' : searchBy === 'url' ? 'URL' : searchBy === 'user' ? 'user' : 'transaction ID'}`}
-            className='pl-9'
+            className='h-8 pl-9 text-sm'
             onChange={(event) => setSearchFilter(event.target.value)}
             value={searchFilter}
           />
         </div>
         <SelectField
+          size='sm'
           className='w-full lg:w-48'
           aria-label='Search field'
           value={searchBy}
@@ -173,6 +173,7 @@ export default function FilterBar({
           variant={showAdvanced ? 'secondary' : 'outline'}
           aria-expanded={showAdvanced}
           onClick={() => setShowAdvanced((open) => !open)}
+          size='sm'
           className='shrink-0'
         >
           <SlidersHorizontal className='size-4' />
@@ -240,18 +241,15 @@ export default function FilterBar({
       )}
 
       {showAdvanced && (
-        <div className='rounded-xl border bg-muted/20 p-4 md:p-5'>
-          <div className='mb-4 flex flex-col gap-1'>
-            <h3 className='flex items-center gap-2 text-sm font-semibold'>
+        <div className='border-t pt-3'>
+          <div className='mb-3 flex flex-col gap-1'>
+            <h3 className='flex items-center gap-2 text-xs font-semibold'>
               <CalendarClock className='size-4 text-muted-foreground' />
               Refine transactions
             </h3>
-            <p className='text-xs text-muted-foreground'>
-              Combine a verdict with a recent or custom time window.
-            </p>
           </div>
 
-          <div className='flex flex-col gap-5'>
+          <div className='flex flex-col gap-3'>
             <div className='flex flex-col gap-2'>
               <span className='text-xs font-medium text-muted-foreground'>
                 Quick time ranges
@@ -262,6 +260,7 @@ export default function FilterBar({
                     key={range.value}
                     type='button'
                     size='sm'
+                    className='h-7 px-2 text-xs'
                     variant={
                       selectedQuickRange === range.value
                         ? 'secondary'
@@ -275,7 +274,7 @@ export default function FilterBar({
               </div>
             </div>
 
-            <div className='grid gap-4 md:grid-cols-[minmax(180px,0.7fr)_1fr] md:items-end'>
+            <div className='grid gap-3 md:grid-cols-[minmax(180px,0.7fr)_1fr] md:items-end'>
               <label className='flex flex-col gap-2 text-sm'>
                 <span className='text-xs font-medium text-muted-foreground'>
                   Verdicts
@@ -284,6 +283,7 @@ export default function FilterBar({
                   <Button
                     type='button'
                     size='sm'
+                    className='h-7 px-2 text-xs'
                     variant={
                       status.length === 0 ? 'secondary' : 'outline'
                     }
@@ -300,6 +300,7 @@ export default function FilterBar({
                           key={value}
                           type='button'
                           size='sm'
+                          className='h-7 px-2 text-xs'
                           variant={selected ? 'secondary' : 'outline'}
                           aria-pressed={selected}
                           onClick={() =>
@@ -348,10 +349,11 @@ export default function FilterBar({
               </p>
             )}
 
-            <div className='flex flex-col-reverse gap-2 border-t pt-4 sm:flex-row sm:justify-end'>
+            <div className='flex flex-col-reverse gap-2 border-t pt-3 sm:flex-row sm:justify-end'>
               <Button
                 type='button'
                 variant='ghost'
+                size='sm'
                 onClick={() => {
                   setFilter(null);
                   setStatus([]);
@@ -363,7 +365,7 @@ export default function FilterBar({
               >
                 Reset filters
               </Button>
-              <Button type='button' onClick={applyFilters}>
+              <Button type='button' size='sm' onClick={applyFilters}>
                 Apply filters
               </Button>
             </div>

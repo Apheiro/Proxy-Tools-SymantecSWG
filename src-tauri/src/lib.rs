@@ -462,8 +462,6 @@ async fn start_logs(
         let mut json_logs = OpenOptions::new().create(true).append(true)
             .open(cache_dir.join("logs.jsonl")).expect("json open");
 
-        let mut blocks_in_mem: Vec<String> = Vec::new();
-        let mut blocks_json_in_mem: Vec<String> = Vec::new();
         let mut ids: HashSet<u64> = HashSet::with_capacity(50_000);
         let mut last_error: Option<String> = None;
 
@@ -524,10 +522,7 @@ async fn start_logs(
                         }
                     }
                     if !appended_blocks.is_empty() {
-                        blocks_in_mem.extend(appended_blocks.clone());
                         let appended_json: Vec<String> = append_json_for_blocks(&appended_blocks, &mut json_logs).unwrap();
-                        blocks_json_in_mem.extend(appended_json.clone());
-                        println!("blocks in mem: {}", blocks_in_mem.len());
                         let _ = app.emit("logs:update", &Logs {
                             json: appended_json,
                             raw: appended_blocks,

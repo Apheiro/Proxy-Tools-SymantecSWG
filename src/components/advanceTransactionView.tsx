@@ -4,27 +4,9 @@ import {
   useDisclosure,
 } from '@mantine/hooks';
 import { cva } from '@/lib/cva';
-import { find } from 'lodash-es';
-import {
-  ChevronDown,
-  Copy,
-  HardDriveDownload,
-  HardDriveUpload,
-  type LucideProps,
-  User,
-  Waypoints,
-  X,
-} from 'lucide-react';
-import {
-  type Dispatch,
-  type ForwardRefExoticComponent,
-  type RefAttributes,
-  type SetStateAction,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react';
+import { disclosureIconStyles } from '@/lib/uiVariants';
+import { ChevronDown, Copy, X } from 'lucide-react';
+import { type Dispatch, type SetStateAction, useState } from 'react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import {
@@ -44,153 +26,78 @@ import {
 } from '@/components/ui/dialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from './ui/badge';
+import TraceHandoffs from '@/components/traceHandoffs';
+import TraceOutcomeBadge from '@/components/traceOutcomeBadge';
 import {
-  Timeline,
-  TimelineContent,
-  TimelineDate,
-  TimelineHeader,
-  TimelineIndicator,
-  TimelineItem,
-  TimelineSeparator,
-  TimelineTitle,
-} from './ui/timeline';
-
-const checkpointValues = {
-  'new-connection': {
-    icon: Waypoints,
-    name: 'Transaction Started',
-    description: (vi: string, _vo: string) =>
-      `Finished establishing client side TCP connection in ${vi}ms`,
-  },
-  'client-in': {
-    icon: User,
-    name: 'Client Connected',
-    description: (vi: string, vo: string) =>
-      `client started sending data ${vi}ms in, took ${vo}ms`,
-  },
-  'server-out': {
-    icon: HardDriveUpload,
-    name: 'Request Sent',
-    description: (vi: string, _vo: string) =>
-      `Server side connection started at ${vi}ms`,
-  },
-  'cache-hit': {
-    icon: HardDriveDownload,
-    name: 'Response from Cache',
-    description: (vi: string, vo: string) =>
-      `Response got from cache in ${vi}ms, took ${vo}ms`,
-  },
-  'server-in': {
-    icon: HardDriveDownload,
-    name: 'Server Response',
-    description: (vi: string, vo: string) =>
-      `Server started sending response at ${vi}ms and took ${vo}ms`,
-  },
-  'client-out': {
-    icon: User,
-    name: 'Client response',
-    description: (vi: string, vo: string) =>
-      `Proxy started sending data to client at ${vi}ms, took ${vo}ms`,
-  },
-};
-
-interface Point {
-  name: string;
-  id: number;
-  startMs: number;
-  nameId: string;
-  elapsedMs: number;
-  description: string;
-  icon: ForwardRefExoticComponent<
-    Omit<LucideProps, 'ref'> & RefAttributes<SVGSVGElement>
-  >;
-}
-
-function generatePoints(checkpoints?: Checkpoints) {
-  const points: Point[] = [];
-  let idx = 0;
-  for (const point of Object.keys(checkpointValues)) {
-    const v = checkpoints[point];
-    if (!v) continue;
-    const c = checkpointValues[point];
-    points.push({
-      name: c.name,
-      nameId: point,
-      id: idx++,
-      startMs: v?.startMs,
-      elapsedMs: v?.elapsedMs,
-      description: c.description(v?.startMs, v?.elapsedMs),
-      icon: c.icon,
-    });
-  }
-  if (!find(points, { nameId: 'client-out' }))
-    points.push({
-      name: 'client-out',
-      nameId: 'client-out',
-      id: points.length,
-      startMs: 0,
-      elapsedMs: 0,
-      description: '',
-      icon: User,
-    });
-  return points;
-}
+  policyLineVerdict,
+  traceDuration,
+  type TraceOutcome,
+  type TraceRelation,
+} from '@/lib/policyTrace';
 
 function Connection({
   checkpoints,
+  total,
 }: {
   checkpoints?: Checkpoints;
-  trs?: string;
+  total: string;
 }) {
-  const position = useRef(0);
-  const connectionLine = useMemo(
-    () => generatePoints(checkpoints),
-    [checkpoints],
-  );
-
-  useEffect(() => {
-    for (const point of connectionLine) {
-      if (checkpoints[point.nameId] === null) continue;
-      position.current = point.id;
-    }
-  }, [checkpoints]);
-
+  const recorded = Object.entries(checkpoints ?? {})
+    .filter(([, point]) => point != null)
+    .sort(([, a], [, b]) => a.startMs - b.startMs);
   return (
-    <div className='max-w-250 p-6 flex flex-col gap-5 items-center'>
-      <p className='font-semibold text-sm'>
-        Total transaction time:{' '}
-        {checkpoints['stop-transaction']?.startMs} ms
+    <div className='space-y-3'>
+      <p className='text-sm font-medium'>
+        Transaction duration: {total}
       </p>
-      <Timeline value={position.current} orientation='horizontal'>
-        {connectionLine?.map((point) => (
-          <TimelineItem key={point.id} step={point.id}>
-            <TimelineHeader className='w-fit'>
-              <TimelineSeparator />
-
-              {position.current >= point.id && (
-                <TimelineDate className='w-fit'>
-                  {point.startMs} ms
-                </TimelineDate>
-              )}
-
-              <TimelineTitle className='w-fit'>
-                {point.name}
-              </TimelineTitle>
-              <TimelineIndicator className='bg-primary/10 group-data-completed/timeline-item:bg-primary group-data-completed/timeline-item:text-primary-foreground flex size-6 items-center justify-center border-none group-data-[orientation=vertical]/timeline:-left-7'>
-                <point.icon size={14} />
-              </TimelineIndicator>
-            </TimelineHeader>
-            {position.current >= point.id && (
-              <TimelineContent>{point.description}</TimelineContent>
-            )}
-          </TimelineItem>
-        ))}
-      </Timeline>
+      <p className='text-xs text-muted-foreground'>
+        Only checkpoints recorded for this processing type are listed.
+        Missing stages are not errors. Start is relative to the
+        beginning of this transaction.
+      </p>
+      {recorded.length ? (
+        <table className='w-full text-left text-sm'>
+          <thead className='text-xs text-muted-foreground'>
+            <tr className='border-b'>
+              <th className='py-2 font-medium'>Checkpoint</th>
+              <th className='py-2 text-right font-medium'>
+                Start (ms)
+              </th>
+              <th className='py-2 text-right font-medium'>
+                Elapsed (ms)
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {recorded.map(([name, point]) => (
+              <tr key={name} className='border-b last:border-0'>
+                <th
+                  scope='row'
+                  className='break-words py-2 pr-3 font-mono text-xs font-normal'
+                >
+                  {name}
+                </th>
+                <td className='py-2 text-right tabular-nums'>
+                  {point.startMs ?? '—'}
+                </td>
+                <td className='py-2 text-right tabular-nums'>
+                  {point.elapsedMs ?? '—'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <p className='text-sm text-muted-foreground'>
+          No checkpoints were recorded.
+        </p>
+      )}
     </div>
   );
 }
 
-const MatchStyle = cva({ base: ['rounded-sm', ' p-2', 'relative'],
+const MatchStyle = cva({
+  base: ['rounded-sm', ' p-2', 'relative'],
   variants: {
     type: {
       allowed: 'bg-green-300/10',
@@ -199,9 +106,10 @@ const MatchStyle = cva({ base: ['rounded-sm', ' p-2', 'relative'],
       base: 'bg-transparent',
     },
   },
- });
+});
 
-const DotStyle = cva({ base: [
+const DotStyle = cva({
+  base: [
     'before:content-[""]',
     'before:animate-ping',
     'before:left-0',
@@ -218,32 +126,19 @@ const DotStyle = cva({ base: [
     'top-[calc(50%-3px)]',
     'left-[-20px]',
   ],
-    variants: {
-      type: {
-        allowed: 'bg-green-300 before:bg-green-300',
-        rejected: 'bg-red-400 before:bg-red-400',
-        exception: 'bg-red-400 before:bg-red-400',
-        base: 'bg-gray-300/50',
-      },
+  variants: {
+    type: {
+      allowed: 'bg-green-300 before:bg-green-300',
+      rejected: 'bg-red-400 before:bg-red-400',
+      exception: 'bg-red-400 before:bg-red-400',
+      base: 'bg-gray-300/50',
     },
-   });
+  },
+});
 
 function PolicyMatch({ match }: { match: string }) {
-  const [veredict, setVerdict] = useState<
-    'allowed' | 'rejected' | 'exception' | 'base'
-  >('base');
-
-  useEffect(() => {
-    if (match.includes('ALLOW') || match.includes('ALLOWED'))
-      setVerdict('allowed');
-    if (
-      match.includes('DENY') ||
-      match.includes('DENIED') ||
-      match.includes('REJECTED')
-    )
-      setVerdict('rejected');
-    if (match.includes('exception')) setVerdict('exception');
-  }, []);
+  const verdict = policyLineVerdict(match);
+  const veredict = verdict === 'unknown' ? 'base' : verdict;
 
   return (
     <p className={MatchStyle({ type: veredict })}>
@@ -255,10 +150,6 @@ function PolicyMatch({ match }: { match: string }) {
 
 function EvaluationMatchesPolicy({ log }: { log: TransactionInfo }) {
   const [showMisses, setShowMisses] = useState(true);
-
-  useEffect(() => {
-    console.log('logs processed', log);
-  }, []);
 
   return (
     <div className='flex flex-col gap-3'>
@@ -310,11 +201,19 @@ export default function AdvanceTransactionView({
   isOpen,
   setSelectedTransactionId,
   modalFns: { close },
+  outcome,
+  parent,
+  children,
+  onSelectRelated,
 }: {
   selectedTransaction: { log: TransactionInfo; raw: string } | null;
   isOpen: boolean;
   setSelectedTransactionId: Dispatch<SetStateAction<string | null>>;
   modalFns: UseDisclosureHandlers;
+  outcome?: TraceOutcome;
+  parent?: TraceRelation;
+  children?: TraceRelation[];
+  onSelectRelated: (key: string) => void;
 }) {
   const [animateRef] = useAutoAnimate({ duration: 200 });
   const [showLog, { toggle: toggleLog }] = useDisclosure(false);
@@ -331,8 +230,8 @@ export default function AdvanceTransactionView({
       }}
     >
       <DialogContent className='flex h-[calc(100dvh-2rem)] max-h-[900px] w-[calc(100vw-2rem)] max-w-6xl! flex-col gap-0 overflow-hidden p-0'>
-        <DialogHeader className='shrink-0 border-b px-5 py-4 pr-14 text-left sm:px-7'>
-          <div className='flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
+        <DialogHeader className='grid shrink-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-3 border-b px-5 py-4 text-left sm:px-7'>
+          <div className='flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
             <div className='min-w-0'>
               <DialogTitle className='text-lg'>
                 Transaction details
@@ -350,11 +249,7 @@ export default function AdvanceTransactionView({
                   {log.transaction.type}
                 </Badge>
               )}
-              {log?.decision.verdict && (
-                <Badge variant='outline'>
-                  {log.decision.verdict.toUpperCase()}
-                </Badge>
-              )}
+              {outcome && <TraceOutcomeBadge outcome={outcome} />}
             </div>
           </div>
           <DialogClose asChild>
@@ -363,7 +258,7 @@ export default function AdvanceTransactionView({
               variant='ghost'
               size='icon'
               aria-label='Close transaction details'
-              className='absolute right-4 top-3'
+              className='shrink-0 self-start'
             >
               <X className='size-4' />
             </Button>
@@ -375,22 +270,41 @@ export default function AdvanceTransactionView({
             ref={animateRef}
             className='mx-auto flex w-full max-w-5xl flex-col gap-5 p-4 sm:gap-6 sm:p-6'
           >
+            {log && (
+              <div className='space-y-3 rounded-lg border p-4'>
+                <p className='break-all font-semibold'>
+                  {log.transaction.dest || 'Destination not recorded'}
+                </p>
+                {outcome && (
+                  <p className='break-words text-sm text-muted-foreground'>
+                    {outcome.source === 'reported'
+                      ? 'Reported verdict'
+                      : 'Policy evidence'}
+                    : {outcome.evidence}
+                  </p>
+                )}
+                <TraceHandoffs
+                  parent={parent}
+                  children={children}
+                  onSelect={onSelectRelated}
+                />
+              </div>
+            )}
             <Card className='gap-0'>
               <CardHeader className='px-4 py-4 sm:px-5'>
                 <CardTitle className='text-base'>
-                  Connection timeline
+                  Recorded checkpoints
                 </CardTitle>
                 <CardDescription>
-                  Transaction checkpoints and elapsed time.
+                  Processing type:{' '}
+                  {log?.transaction.type || 'Not recorded'}.
                 </CardDescription>
               </CardHeader>
-              <CardContent className='overflow-x-auto px-2 pb-4 sm:px-4'>
-                <div className='min-w-[700px]'>
-                  <Connection
-                    trs={log?.transaction.id}
-                    checkpoints={log?.timing.checkpoints}
-                  />
-                </div>
+              <CardContent className='px-4 pb-4 sm:px-5'>
+                <Connection
+                  checkpoints={log?.timing?.checkpoints}
+                  total={log ? traceDuration(log) : 'Not recorded'}
+                />
               </CardContent>
             </Card>
 
@@ -448,7 +362,9 @@ export default function AdvanceTransactionView({
                   >
                     {showLog ? 'Hide log' : 'Show log'}
                     <ChevronDown
-                      className={`transition-transform ${showLog ? 'rotate-180' : ''}`}
+                      className={disclosureIconStyles({
+                        expanded: showLog,
+                      })}
                     />
                   </Button>
                   <Button

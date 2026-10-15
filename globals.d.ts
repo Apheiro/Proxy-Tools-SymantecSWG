@@ -92,6 +92,7 @@ declare interface Timing {
 }
 
 declare interface Checkpoints {
+  [name: string]: Checkpoint | null;
   'access-logging': Checkpoint | null;
   'client-in': Checkpoint | null;
   'client-out': Checkpoint | null;
@@ -115,6 +116,7 @@ declare interface Filters {
 }
 
 declare interface Transaction {
+  method?: string;
   dest: string;
   from: string;
   id: string;

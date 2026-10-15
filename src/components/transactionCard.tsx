@@ -1,146 +1,153 @@
-/** biome-ignore-all lint/style/useNamingConvention: <> */
-import dayjs from 'dayjs';
-import Link from 'next/link';
-import type { Dispatch, SetStateAction } from 'react';
+import { memo } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
+import TraceHandoffs from '@/components/traceHandoffs';
+import TraceOutcomeBadge from '@/components/traceOutcomeBadge';
 import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
-import DotStatus from './ui/dotStatus';
+  traceDuration,
+  type TraceEntry,
+  type TraceRelation,
+} from '@/lib/policyTrace';
 
 function Field({
   label,
-  value,
-  bold = false,
+  children,
 }: {
   label: string;
-  value: React.ReactNode;
-  bold?: boolean;
+  children: React.ReactNode;
 }) {
   return (
-    <p className='grid grid-cols-3 gap-2 py-1 text-sm'>
-      {bold ? (
-        <>
-          <span className='text-muted-foreground font-semibold'>
-            {label}
-          </span>
-          <span className='font-semibold col-span-2 truncate'>
-            {value}
-          </span>
-        </>
-      ) : (
-        <>
-          <span className='text-muted-foreground'>{label}</span>
-          <span className='col-span-2 truncate'>{value}</span>
-        </>
-      )}
-    </p>
+    <div className='min-w-0'>
+      <dt className='text-xs text-muted-foreground'>{label}</dt>
+      <dd className='mt-1 break-all text-sm'>
+        {children || 'Not recorded'}
+      </dd>
+    </div>
   );
 }
 
 function TransactionCard({
-  log,
-  setSelectedTransactionId,
+  entry,
+  parent,
+  children,
+  onSelect,
 }: {
-  log: TransactionInfo;
-  setSelectedTransactionId: Dispatch<SetStateAction<string | null>>;
+  entry: TraceEntry;
+  parent?: TraceRelation;
+  children?: TraceRelation[];
+  onSelect: (key: string) => void;
 }) {
+  const { log, outcome, timestamp } = entry;
+  const requestMethod = log.transaction.method;
+  const client = log.connection.client;
+  const endpoint = client?.includes(':') ? `[${client}]` : client;
   return (
-    <Card
-      className='p-2 gap-0 max-w-[1200px] w-full'
-      id={log.transaction.id}
+    <article
+      aria-label={`Transaction ${log.transaction.id || 'without ID'}`}
     >
-      <CardHeader className='p-1'>
-        <CardTitle className='flex items-center justify-between '>
-          <span className='flex items-center gap-2'>
-            <span className='text-xl font-semibold'>
-              {log.application.name}
-            </span>
-            <Badge variant='secondary'>{log.transaction.type}</Badge>
-            {log.transaction.pid && (
+      <Card className='min-w-0 gap-0 py-0'>
+        <CardContent className='space-y-3 p-4 sm:p-5'>
+          <div className='flex flex-wrap items-center justify-between gap-3'>
+            <div className='flex min-w-0 flex-wrap items-center gap-2'>
               <Badge variant='secondary'>
-                <Link href={`#${log.transaction.pid}`}>
-                  Handed off from: {log.transaction.pid}
-                </Link>
+                {log.transaction.type || 'Type not recorded'}
               </Badge>
-            )}
-          </span>
-          <div className='flex items-center gap-2'>
-            <Button
-              variant='outline'
-              onClick={() => {
-                setSelectedTransactionId(log.transaction.id);
-              }}
-            >
-              More
-            </Button>
-          </div>
-        </CardTitle>
-      </CardHeader>
-      <CardContent className='p-1'>
-        <div className='grid md:grid-cols-2 gap-4'>
-          <div>
-            <Field label='ID' value={log.transaction.id} />
-            <Field label='Aplication' value={log.application.name} />
-            <Field
-              label='Conection'
-              bold
-              value={`${log.transaction.dest}`}
-            />
-            <Field
-              label='Date'
-              value={dayjs(log.connection.time).format(
-                'DD MMMM YYYY',
+              {requestMethod && requestMethod !== 'unknown' && (
+                <Badge variant='outline'>{requestMethod}</Badge>
               )}
-            />
-            <Field
-              label='Hour'
-              value={dayjs(log.connection.time).format('hh:mm:ss A')}
-            />
-          </div>
-          <div>
-            <Field label='User' value={log.user.name} />
-            <Field label='Realm' value={log.user.realm} />
-            <Field
-              label='Client'
-              value={`${log.connection.client}:${log.connection.sourcePort}`}
-            />
-            <div className='py-1'>
-              <div className='text-sm text-muted-foreground mb-1'>
-                Categories
-              </div>
-              <div className='flex flex-wrap gap-2'>
-                {log.decision.categories.map((c) => (
-                  <Badge key={c}>{c}</Badge>
-                ))}
-              </div>
+              <span className='break-all font-mono text-xs text-muted-foreground'>
+                #{log.transaction.id || 'Not recorded'}
+              </span>
+            </div>
+            <div className='flex items-center gap-2'>
+              <TraceOutcomeBadge outcome={outcome} />
+              <Button
+                type='button'
+                variant='outline'
+                size='sm'
+                onClick={() => onSelect(entry.key)}
+              >
+                Details
+              </Button>
             </div>
           </div>
-        </div>
-
-        <Badge
-          className='flex justify-center items-center leading-0 p-2 gap-2 mt-2'
-          variant='secondary'
-        >
-          <DotStatus
-            veredict={
-              log.decision.verdict as
-                | 'allowed'
-                | 'rejected'
-                | 'unreached'
-                | 'exception'
-                | 'unknown'
-            }
+          <div>
+            <h3 className='break-all text-base font-semibold leading-snug'>
+              {log.transaction.dest || 'Destination not recorded'}
+            </h3>
+            {log.application.name && (
+              <p className='mt-1 break-words text-sm text-muted-foreground'>
+                {log.application.name}
+                {log.application.group
+                  ? ` · ${log.application.group}`
+                  : ''}
+              </p>
+            )}
+          </div>
+          <dl className='grid grid-cols-2 gap-x-5 gap-y-3 rounded-lg bg-muted/40 p-3 lg:grid-cols-4'>
+            <Field label='Client'>
+              {endpoint
+                ? `${endpoint}${log.connection.sourcePort ? `:${log.connection.sourcePort}` : ''}`
+                : null}
+            </Field>
+            <Field label='User'>
+              {log.user.name ||
+                log.user.relativeName ||
+                'Not recorded'}
+              {log.user.realm && (
+                <span className='block text-xs text-muted-foreground'>
+                  {log.user.realm}
+                </span>
+              )}
+            </Field>
+            <Field
+              label={`Timestamp${timestamp.zone ? ` · ${timestamp.zone}` : ''}`}
+            >
+              {timestamp.date}
+              {timestamp.epoch != null && (
+                <span className='block tabular-nums text-muted-foreground'>
+                  {timestamp.time}
+                </span>
+              )}
+            </Field>
+            <Field label='Transaction duration'>
+              {traceDuration(log)}
+            </Field>
+          </dl>
+          <p className='break-words text-xs text-muted-foreground'>
+            <span className='font-medium'>
+              {outcome.source === 'reported'
+                ? 'Reported verdict'
+                : outcome.source === 'matched'
+                  ? 'Matched action · final verdict absent'
+                  : 'Policy result'}
+              :
+            </span>{' '}
+            {outcome.evidence}
+          </p>
+          {!!log.decision.categories?.length && (
+            <div className='flex flex-wrap gap-1.5'>
+              {log.decision.categories.map((category) => (
+                <Badge
+                  key={category}
+                  variant='secondary'
+                  className='max-w-full whitespace-normal break-words text-xs'
+                >
+                  {category}
+                </Badge>
+              ))}
+            </div>
+          )}
+          <TraceHandoffs
+            parent={parent}
+            children={children}
+            onSelect={onSelect}
           />
-          {log.decision.verdict.toUpperCase()}
-        </Badge>
-      </CardContent>
-    </Card>
+        </CardContent>
+      </Card>
+    </article>
   );
 }
 
-export default TransactionCard;
+export default memo(TransactionCard);
