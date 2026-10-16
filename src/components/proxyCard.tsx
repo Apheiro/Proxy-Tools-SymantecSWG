@@ -5,8 +5,11 @@ import {
   AlertCircle,
   AppWindow,
   MoreHorizontal,
+  ScrollText,
+  Stethoscope,
   Tags,
   Terminal,
+  Trash2,
   Workflow,
 } from 'lucide-react';
 import { valibotResolver } from 'mantine-form-valibot-resolver';
@@ -395,9 +398,11 @@ export default function ProxyCard({
               onClick={() => setOpenAlert(true)}
               variant='destructive'
             >
+              <Trash2 className='size-4' />
               Delete
             </DropdownMenuItem>
             <DropdownMenuItem onClick={() => setOpenLog(true)}>
+              <ScrollText className='size-4' />
               Ping log
             </DropdownMenuItem>
             <DropdownMenuItem
@@ -436,6 +441,7 @@ export default function ProxyCard({
                   query: { proxy: proxyAddress },
                 }}
               >
+                <Stethoscope className='size-4' />
                 Diagnostic tools
               </Link>
             </DropdownMenuItem>
