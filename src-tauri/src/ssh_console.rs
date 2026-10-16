@@ -5,7 +5,9 @@ use russh::ChannelMsg;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
+    future::Future,
     path::PathBuf,
+    pin::Pin,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
@@ -21,6 +23,7 @@ use tokio_util::sync::CancellationToken;
 
 const PAGE_BYTES: usize = 32 * 1024;
 const MAX_COMMANDS: usize = 5000;
+const MAX_INPUT_BYTES: usize = 1024 * 1024;
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConsoleBlock {
@@ -219,11 +222,48 @@ pub fn send_ssh_input(
     value: String,
     sensitive: bool,
 ) -> Result<(), String> {
-    if value.len() > 8192 || value.contains(['\r', '\n', '\0']) {
-        return Err("Send a single line of at most 8192 bytes.".into());
+    let entries = state
+        .0
+        .lock()
+        .map_err(|_| "SSH sessions are unavailable.")?;
+    let entry = entries.get(&id).ok_or("Session not found.")?;
+    let mut current = entry
+        .snapshot
+        .lock()
+        .map_err(|_| "SSH session is unavailable.")?;
+    if !current.connected {
+        return Err("Session is not connected.".into());
     }
-    enqueue(&state, &id, Input::Line(value, sensitive))
+    if current.phase == "Sending input" {
+        return Err("Wait for the current input to finish sending.".into());
+    }
+    let value = normalize_input(&value, sensitive || current.input_mode == "secret")?;
+    entry
+        .sender
+        .try_send(Input::Line(value, sensitive))
+        .map_err(|_| "Session is closed or its input queue is full.")?;
+    current.phase = "Sending input".into();
+    Ok(())
 }
+fn normalize_input(value: &str, sensitive: bool) -> Result<String, String> {
+    if value.len() > MAX_INPUT_BYTES || value.contains('\0') {
+        return Err("SSH input must be at most 1 MiB and cannot contain NUL characters.".into());
+    }
+    if sensitive && (value.len() > 8192 || value.contains(['\r', '\n'])) {
+        return Err("Sensitive responses must be a single line of at most 8192 bytes.".into());
+    }
+    // Normalize Windows paste without trimming indentation, empty lines or whitespace.
+    Ok(value.replace("\r\n", "\n").replace('\r', "\n"))
+}
+fn pty_input(value: &str) -> Vec<u8> {
+    let mut bytes = value.replace('\n', "\r").into_bytes();
+    // Enter each line once. An existing final newline already submits the last line.
+    if !bytes.ends_with(b"\r") {
+        bytes.push(b'\r');
+    }
+    bytes
+}
+
 fn enqueue(state: &ConsoleState, id: &str, input: Input) -> Result<(), String> {
     state
         .0
@@ -505,7 +545,7 @@ async fn run(
 }
 async fn run_shell(
     connection: SshConnection,
-    mut channel: russh::Channel<russh::client::Msg>,
+    channel: russh::Channel<russh::client::Msg>,
     directory: &std::path::Path,
     password: &str,
     state: Arc<Mutex<ConsoleSession>>,
@@ -516,6 +556,9 @@ async fn run_shell(
         s.connected = true;
         s.phase = "Connected".into();
     });
+    let (mut channel, writer) = channel.split();
+    let writer = Arc::new(writer);
+    let mut outgoing: Option<Pin<Box<dyn Future<Output = Result<(), String>> + Send>>> = None;
     let mut redactor = Redactor::default();
     redactor.secret(password);
     let mut file = tokio::fs::File::create(directory.join("0.txt"))
@@ -530,8 +573,18 @@ async fn run_shell(
         loop {
             tokio::select! {
                 _ = stop.cancelled() => break,
+                sent = async {
+                    match outgoing.as_mut() {
+                        Some(task) => task.await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    outgoing = None;
+                    sent?;
+                    change(&state, |s| s.phase = "Connected".into());
+                }
                 _ = tick.tick() => {
-                    if !settled && last_data.elapsed() >= Duration::from_millis(250) {
+                    if outgoing.is_none() && !settled && last_data.elapsed() >= Duration::from_millis(250) {
                         let (mode, prompt) = input_mode(&tail, base.as_deref());
                         if mode != "waiting" {
                             write_output(&mut file, &redactor.push(&[], true), &state).await?;
@@ -547,12 +600,14 @@ async fn run_shell(
                 input = receiver.recv() => match input {
                     None | Some(Input::Close) => break,
                     Some(Input::Continue) => {
-                        channel.data(&b" "[..]).await.map_err(|e| e.to_string())?;
+                        writer.data(&b" "[..]).await.map_err(|e| e.to_string())?;
                         tail.clear(); settled = true;
                         change(&state, |s| s.input_mode = "waiting".into());
                     }
                     Some(Input::Interrupt) => {
-                        channel.data(&b"\x03"[..]).await.map_err(|e| e.to_string())?;
+                        outgoing = None;
+                        change(&state, |s| s.phase = "Connected".into());
+                        writer.data(&b"\x03"[..]).await.map_err(|e| e.to_string())?;
                         tail.clear(); settled = true;
                         change(&state, |s| { s.busy = true; s.input_mode = "waiting".into(); if let Some(block) = s.blocks.last_mut() { block.complete = false; } });
                     }
@@ -566,9 +621,13 @@ async fn run_shell(
                             file = tokio::fs::File::create(directory.join(format!("{id}.txt"))).await.map_err(|e| e.to_string())?;
                             change(&state, |s| s.blocks.push(ConsoleBlock { id, command: value.clone(), created_at: chrono::Utc::now().to_rfc3339(), bytes: 0, complete: false }));
                         }
+                        let value = normalize_input(&value, secret)?;
                         if secret { redactor.secret(&value); }
-                        // CR is a single PTY Enter; CRLF can accidentally answer a password challenge.
-                        channel.data(format!("{value}\r").as_bytes()).await.map_err(|e| e.to_string())?;
+                        let bytes = pty_input(&value);
+                        let sink = writer.clone();
+                        // Keep reading while sending: large pasted policies can exceed SSH windows.
+                        outgoing = Some(Box::pin(async move { sink.data(bytes.as_slice()).await.map_err(|e| e.to_string()) }));
+                        change(&state, |s| s.phase = "Sending input".into());
                         tail.clear(); settled = true;
                         change(&state, |s| { s.busy = true; s.input_mode = "waiting".into(); if let Some(block) = s.blocks.last_mut() { block.complete = false; } });
                     }
@@ -594,8 +653,9 @@ async fn run_shell(
         }
         Ok(())
     }.await;
+    drop(outgoing);
     let flushed = write_output(&mut file, &redactor.push(&[], true), &state).await;
-    let _ = channel.close().await;
+    let _ = writer.close().await;
     let disconnected = connection.disconnect().await;
     result.and(flushed).and(disconnected)
 }
@@ -618,7 +678,7 @@ mod tests {
     #[tokio::test]
     async fn persistent_shell_preserves_privilege_and_complete_large_output() {
         use crate::backup_manager::ssh_tests::{fixture_connection, TEST_PASSWORD};
-        let (mut connection, commands, root, payload) = fixture_connection("").await;
+        let (mut connection, commands, root, payload) = fixture_connection("small-window").await;
         connection
             .authenticate("test", TEST_PASSWORD, None)
             .await
@@ -683,22 +743,79 @@ mod tests {
             .unwrap();
         tokio::time::sleep(Duration::from_millis(80)).await;
         wait_for(&state, "command").await;
+        sender
+            .send(Input::Line("inline policy local EOF".into(), false))
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(350)).await;
+        assert!(snapshot(&state).busy);
+        // A block larger than the old 8 KiB limit, including indentation and empty lines.
+        let policy = format!(
+            "<Proxy>\r\n  url.domain=example.test allow\r\n\r\n{}",
+            "  ; policy comment\r\n".repeat(800)
+        );
+        let normalized = normalize_input(&policy, false).unwrap();
+        sender
+            .send(Input::Line(normalized.clone(), false))
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while commands.lock().unwrap().len() < 2 + 1 + normalized.lines().count() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            snapshot(&state).busy,
+            "policy must remain open until EOF is explicitly sent"
+        );
+        assert!(!commands.lock().unwrap().iter().any(|line| line == "EOF"));
+        sender.send(Input::Line("EOF".into(), false)).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        wait_for(&state, "command").await;
         sender.send(Input::Close).await.unwrap();
         task.await.unwrap().unwrap();
         let status = snapshot(&state);
-        assert_eq!(status.blocks.len(), 3);
+        assert_eq!(status.blocks.len(), 4);
         assert!(status.blocks[2].complete);
+        assert!(status.blocks[3].complete);
         let output = tokio::fs::read(root.join("2.txt")).await.unwrap();
         assert!(output.starts_with(&payload));
         assert!(String::from_utf8_lossy(&output).contains("# End of generated test configuration"));
         assert!(!serde_json::to_string(&status)
             .unwrap()
             .contains(TEST_PASSWORD));
-        assert_eq!(
-            *commands.lock().unwrap(),
-            vec!["enable", "show configuration expanded noprompts"]
+        let recorded = commands.lock().unwrap();
+        assert_eq!(recorded[0], "enable");
+        assert_eq!(recorded[1], "show configuration expanded noprompts");
+        assert_eq!(recorded[2], "inline policy local EOF");
+        assert_eq!(recorded[3], "<Proxy>");
+        assert_eq!(recorded[4], "  url.domain=example.test allow");
+        assert_eq!(recorded[5], "");
+        assert_eq!(recorded.last().unwrap(), "EOF");
+        assert!(
+            String::from_utf8_lossy(&tokio::fs::read(root.join("3.txt")).await.unwrap())
+                .contains("Policy installed")
         );
+        drop(recorded);
         std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn multiline_input_preserves_policy_format_and_submits_each_line_once() {
+        let input = "<Proxy>\r\n  url.domain=example.test allow\r\n\r\n";
+        let normalized = normalize_input(input, false).unwrap();
+        assert_eq!(normalized, "<Proxy>\n  url.domain=example.test allow\n\n");
+        assert_eq!(
+            pty_input(&normalized),
+            b"<Proxy>\r  url.domain=example.test allow\r\r"
+        );
+        assert_eq!(pty_input("EOF"), b"EOF\r");
+        assert_eq!(pty_input("EOF\n"), b"EOF\r");
+        assert_eq!(pty_input(""), b"\r");
+        assert!(normalize_input("password\nEOF", true).is_err());
+        assert!(normalize_input("policy\0text", false).is_err());
+        assert!(normalize_input(&"x".repeat(MAX_INPUT_BYTES + 1), false).is_err());
     }
     #[test]
     fn fragmented_secrets_are_removed_without_losing_output() {

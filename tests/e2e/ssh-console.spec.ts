@@ -24,9 +24,11 @@ test.beforeEach(async ({ page, context }) => {
       sessionStorage.getItem('ssh-test-connects') ?? 0,
     );
     const calls: string[] = [];
+    const inputs: string[] = [];
     Object.assign(window, {
       isTauri: true,
       sshCalls: calls,
+      sshInputs: inputs,
       __TAURI_INTERNALS__: {
         metadata: {
           currentWindow: { label: 'main' },
@@ -100,6 +102,7 @@ test.beforeEach(async ({ page, context }) => {
             return session.id;
           }
           if (command === 'send_ssh_input') {
+            inputs.push(args.value ?? '');
             if (session.inputMode === 'secret') {
               output[1] += '\nPrivileged mode enabled.\nBlue Coat# ';
               session.busy = false;
@@ -107,6 +110,18 @@ test.beforeEach(async ({ page, context }) => {
               session.prompt = 'Blue Coat#';
               session.blocks[1].complete = true;
               session.blocks[1].bytes = output[1].length;
+            } else if (session.busy) {
+              const block = session.blocks.at(-1);
+              output[block.id] +=
+                args.value === 'EOF'
+                  ? '\nPolicy installed\nBlue Coat# '
+                  : args.value;
+              block.bytes = output[block.id].length;
+              if (args.value === 'EOF') {
+                session.busy = false;
+                session.inputMode = 'command';
+                block.complete = true;
+              }
             } else if (!session.busy) {
               const id = session.blocks.length;
               output[id] =
@@ -120,10 +135,21 @@ test.beforeEach(async ({ page, context }) => {
                 command: args.value,
                 createdAt: new Date().toISOString(),
                 bytes: output[id].length,
-                complete: args.value !== 'enable',
+                complete: ![
+                  'enable',
+                  'inline policy local EOF',
+                ].includes(args.value ?? ''),
               });
-              session.busy = args.value === 'enable';
-              session.inputMode = session.busy ? 'secret' : 'command';
+              session.busy = [
+                'enable',
+                'inline policy local EOF',
+              ].includes(args.value ?? '');
+              session.inputMode =
+                args.value === 'enable'
+                  ? 'secret'
+                  : session.busy
+                    ? 'waiting'
+                    : 'command';
             }
             persist();
             return null;
@@ -373,4 +399,49 @@ test('proxy card actions open the selected appliance SSH route', async ({
   await expect(
     page.getByRole('heading', { name: 'SSH console', exact: true }),
   ).toBeVisible();
+});
+
+test('pasted policy retains formatting and EOF is sent separately', async ({
+  page,
+}) => {
+  await connect(page);
+  const input = page.getByLabel('SSH command or response');
+  await input.fill('inline policy local EOF');
+  await input.press('Enter');
+  await expect(input).toHaveValue('');
+  const policy =
+    '<Proxy>\n  url.domain=example.test allow\n\n  ; keep indentation\n';
+  await page.evaluate(
+    (text) => navigator.clipboard.writeText(text),
+    policy,
+  );
+  await input.focus();
+  await input.press('Control+V');
+  await expect(input).toHaveValue(policy);
+  await input.press('Shift+Enter');
+  await expect(input).toHaveValue(policy + '\n');
+  await input.press('Enter');
+  await expect(input).toHaveValue('');
+  const values = () =>
+    page.evaluate(
+      () => (window as unknown as { sshInputs: string[] }).sshInputs,
+    );
+  expect(await values()).toEqual([
+    'inline policy local EOF',
+    policy + '\n',
+  ]);
+  await expect(
+    page.getByLabel('Command history').getByRole('button'),
+  ).toHaveCount(2);
+  await input.fill('EOF');
+  await input.press('Enter');
+  await expect
+    .poll(values)
+    .toEqual(['inline policy local EOF', policy + '\n', 'EOF']);
+  await expect(
+    page.getByLabel('Output of inline policy local EOF'),
+  ).toContainText('Policy installed');
+  await expect(
+    page.getByLabel('Command history').getByRole('button'),
+  ).toHaveCount(2);
 });

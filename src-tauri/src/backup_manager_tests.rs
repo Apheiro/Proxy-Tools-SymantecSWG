@@ -10,6 +10,11 @@ struct Dummy {
     config: bool,
     visible: bool,
     waiting_password: bool,
+    inline_policy: bool,
+    policy_delimiter: String,
+    policy_text: String,
+    policy_buffer: String,
+    script_mode: bool,
     input: Vec<u8>,
     commands: Arc<Mutex<Vec<String>>>,
     payload: Arc<Vec<u8>>,
@@ -117,12 +122,69 @@ impl server::Handler for Dummy {
         session.data(channel, b"Dummy banner\r\nBlue Coat> ".to_vec())?;
         Ok(())
     }
+    async fn exec_request(
+        &mut self,
+        channel: ChannelId,
+        command: &[u8],
+        session: &mut server::Session,
+    ) -> Result<(), Self::Error> {
+        if command == b"sh -s" {
+            self.script_mode = true;
+            session.channel_success(channel)?;
+        } else {
+            session.channel_failure(channel)?;
+        }
+        Ok(())
+    }
+    async fn channel_eof(
+        &mut self,
+        channel: ChannelId,
+        session: &mut server::Session,
+    ) -> Result<(), Self::Error> {
+        if self.script_mode {
+            let script = std::mem::take(&mut self.input);
+            let sender = session.handle();
+            tokio::spawn(async move {
+                use tokio::io::AsyncWriteExt;
+                let mut child = tokio::process::Command::new("sh")
+                    .arg("-s")
+                    .stdin(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .spawn()
+                    .unwrap();
+                child
+                    .stdin
+                    .take()
+                    .unwrap()
+                    .write_all(&script)
+                    .await
+                    .unwrap();
+                let output = child.wait_with_output().await.unwrap();
+                for chunk in output.stdout.chunks(997) {
+                    if sender.data(channel, chunk.to_vec()).await.is_err() {
+                        return;
+                    }
+                }
+                let _ = sender
+                    .exit_status_request(channel, output.status.code().unwrap_or(1) as u32)
+                    .await;
+                let _ = sender.eof(channel).await;
+                let _ = sender.close(channel).await;
+            });
+        }
+        Ok(())
+    }
     async fn data(
         &mut self,
         channel: ChannelId,
         data: &[u8],
         session: &mut server::Session,
     ) -> Result<(), Self::Error> {
+        if self.script_mode {
+            self.input.extend_from_slice(data);
+            return Ok(());
+        }
         if data.contains(&3) {
             self.input.clear();
             session.data(channel, self.prompt().to_vec())?;
@@ -130,10 +192,30 @@ impl server::Handler for Dummy {
         }
         self.input.extend_from_slice(data);
         while let Some(end) = self.input.iter().position(|c| *c == b'\r' || *c == b'\n') {
-            let command = String::from_utf8_lossy(&self.input[..end])
-                .trim()
-                .to_owned();
+            let line = String::from_utf8_lossy(&self.input[..end]).into_owned();
+            let command = line.trim().to_owned();
             self.input.drain(..=end);
+            if self.inline_policy {
+                self.commands.lock().unwrap().push(line.clone());
+                if line == self.policy_delimiter {
+                    self.inline_policy = false;
+                    if self.policy_delimiter == "EOF" {
+                        session.data(channel, b"Policy installed\r\nBlue Coat# ".to_vec())?;
+                    } else if self.failure == "policy-compile" {
+                        session.data(channel, b"Error: CPL compilation failed\r\n".to_vec())?;
+                        session.data(channel, self.prompt().to_vec())?;
+                    } else {
+                        self.policy_text = self.policy_buffer.clone();
+                        session.data(channel, b"  ok\r\n".to_vec())?;
+                        session.data(channel, self.prompt().to_vec())?;
+                    }
+                } else {
+                    self.policy_buffer.push_str(&line);
+                    self.policy_buffer.push('\n');
+                    session.data(channel, format!("{line}\r\n").into_bytes())?;
+                }
+                continue;
+            }
             if self.waiting_password {
                 self.waiting_password = false;
                 self.privileged = command == TEST_PASSWORD;
@@ -158,6 +240,30 @@ impl server::Handler for Dummy {
             }
             self.commands.lock().unwrap().push(command.clone());
             match command.as_str() {
+                value if value.starts_with("inline policy local ") && self.privileged => {
+                    self.inline_policy = true;
+                    self.policy_delimiter = value
+                        .strip_prefix("inline policy local ")
+                        .unwrap()
+                        .to_owned();
+                    self.policy_buffer.clear();
+                    session.data(channel, b"Enter policy; finish with EOF\r\n".to_vec())?;
+                    continue;
+                }
+                "show sources policy local" if self.config => {
+                    let sender = session.handle();
+                    let output = self.policy_text.clone();
+                    let prompt = self.prompt().to_vec();
+                    tokio::spawn(async move {
+                        for chunk in output.as_bytes().chunks(997) {
+                            if sender.data(channel, chunk.to_vec()).await.is_err() {
+                                return;
+                            }
+                        }
+                        let _ = sender.data(channel, prompt).await;
+                    });
+                    continue;
+                }
                 "enable" => {
                     self.waiting_password = true;
                     // Fragment the interactive challenge across SSH messages.
@@ -247,6 +353,11 @@ pub(crate) async fn fixture_connection(
         config: false,
         visible: false,
         waiting_password: false,
+        inline_policy: false,
+        policy_delimiter: String::new(),
+        policy_text: "<Proxy>\r\n; original\r\nallow\r\n".into(),
+        policy_buffer: String::new(),
+        script_mode: false,
         input: Vec::new(),
         commands: commands.clone(),
         payload: payload.clone(),
@@ -256,6 +367,11 @@ pub(crate) async fn fixture_connection(
         russh::keys::PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519).unwrap();
     let config = Arc::new(server::Config {
         keys: vec![key],
+        window_size: if failure == "small-window" {
+            1024
+        } else {
+            2 * 1024 * 1024
+        },
         auth_rejection_time: Duration::ZERO,
         auth_rejection_time_initial: Some(Duration::ZERO),
         ..Default::default()

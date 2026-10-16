@@ -16,6 +16,7 @@ import {
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -244,6 +245,7 @@ function SessionConsole({
   session: SshSession;
   refresh: () => Promise<void>;
 }) {
+  const inputHelpId = useId();
   const [value, setValue] = useState('');
   const [sensitive, setSensitive] = useState(false);
   const [sending, setSending] = useState(false);
@@ -251,7 +253,7 @@ function SessionConsole({
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
   const outputViewport = useRef<HTMLDivElement>(null);
   const historyViewport = useRef<HTMLDivElement>(null);
-  const input = useRef<HTMLInputElement>(null);
+  const input = useRef<HTMLInputElement | HTMLTextAreaElement>(null);
   const previousCount = useRef(0);
   const [follow, setFollow] = useState(true);
   const rows = useVirtualizer({
@@ -297,6 +299,12 @@ function SessionConsole({
   };
   const send = async () => {
     if (sending || !session.connected) return;
+    if (new TextEncoder().encode(value).length > 1024 * 1024) {
+      toast.error(
+        'Input exceeds 1 MiB. Send the policy in smaller blocks and send EOF only when finished.',
+      );
+      return;
+    }
     setSending(true);
     try {
       await invoke('send_ssh_input', {
@@ -520,47 +528,89 @@ function SessionConsole({
             </Button>
           </div>
           <div className='grid grid-cols-[minmax(0,1fr)_auto] items-end gap-2 [&>div]:min-w-0'>
-            <Input
-              ref={input}
-              aria-label={
-                secret
-                  ? 'SSH password response'
-                  : 'SSH command or response'
-              }
-              type={secret ? 'password' : 'text'}
-              value={value}
-              maxLength={8192}
-              onChange={(event) => setValue(event.target.value)}
-              disabled={!session.connected || sending}
-              autoComplete='off'
-              spellCheck={false}
-              className='min-w-0 font-mono'
-              placeholder={
-                secret
-                  ? 'Enter password…'
-                  : session.busy
-                    ? 'Reply to the appliance…'
-                    : 'Enter command…'
-              }
-              onKeyDown={(event) => {
-                if (
-                  event.ctrlKey &&
-                  event.key.toLowerCase() === 'c' &&
-                  !value
-                ) {
-                  event.preventDefault();
-                  void action('interrupt_ssh_console');
+            {secret ? (
+              <Input
+                ref={(element) => {
+                  input.current = element;
+                }}
+                aria-label='SSH password response'
+                type='password'
+                value={value}
+                maxLength={8192}
+                onChange={(event) => setValue(event.target.value)}
+                disabled={
+                  !session.connected ||
+                  sending ||
+                  session.phase === 'Sending input'
                 }
-              }}
-            />
+                autoComplete='off'
+                className='min-w-0 font-mono'
+                placeholder='Enter password…'
+              />
+            ) : (
+              <textarea
+                ref={(element) => {
+                  input.current = element;
+                }}
+                aria-label='SSH command or response'
+                aria-describedby={inputHelpId}
+                rows={3}
+                value={value}
+                onChange={(event) => setValue(event.target.value)}
+                disabled={
+                  !session.connected ||
+                  sending ||
+                  session.phase === 'Sending input'
+                }
+                autoComplete='off'
+                spellCheck={false}
+                className='border-input placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 max-h-40 min-h-20 w-full min-w-0 resize-y rounded-md border bg-transparent px-3 py-2 font-mono text-sm outline-none focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50'
+                placeholder={
+                  session.busy
+                    ? 'Paste policy content or reply to the appliance…'
+                    : 'Enter command…'
+                }
+                onKeyDown={(event) => {
+                  if (
+                    event.key === 'Enter' &&
+                    !event.shiftKey &&
+                    !event.nativeEvent.isComposing
+                  ) {
+                    event.preventDefault();
+                    void send();
+                  }
+                  if (
+                    event.ctrlKey &&
+                    event.key.toLowerCase() === 'c' &&
+                    !value
+                  ) {
+                    event.preventDefault();
+                    void action('interrupt_ssh_console');
+                  }
+                }}
+              />
+            )}
             <Button
               type='submit'
-              disabled={!session.connected || sending}
+              disabled={
+                !session.connected ||
+                sending ||
+                session.phase === 'Sending input'
+              }
             >
               <Send className='size-4' />
               Send
             </Button>
           </div>
+          {!secret && (
+            <p
+              id={inputHelpId}
+              className='text-xs text-muted-foreground'
+            >
+              Enter to send · Shift+Enter for a new line. Paste
+              preserves line breaks; send EOF separately when ready.
+            </p>
+          )}
           {session.inputMode === 'response' && (
             <div className='flex gap-2'>
               <Button
