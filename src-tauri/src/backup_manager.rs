@@ -1,14 +1,11 @@
 use crate::backup_store::{self, BackupMode, BackupRecord};
-use crate::ssh_client::{
-    command_failed, Cli, Response, SshConnection, SshEvent, SshOptions,
-};
+use crate::ssh_client::{command_failed, Cli, SshConnection, SshEvent, SshOptions};
 use crate::ssh_target::{sgos_prompt_policy, SshTarget};
 use serde::{Deserialize, Serialize};
 use std::{sync::Mutex, time::Duration};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::io::AsyncWriteExt;
 
-const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(1800);
 const SHOW: &str = "show configuration expanded noprompts";
 
@@ -219,39 +216,10 @@ async fn capture_configuration(
     app: Option<&AppHandle>,
 ) -> Result<(u64, Option<String>), String> {
     let report = |event| ssh_progress(app, event);
-    cli.receive(None, false, COMMAND_TIMEOUT, None).await?;
     if let Some(app) = app {
         update(app, "Elevating privileges", Some("enable"), None);
     }
-    cli.send("enable").await?;
-    let (response, _, _) = cli.receive(None, true, COMMAND_TIMEOUT, None).await?;
-    let value = match response {
-        Response::Password => {
-            if let Some(app) = app {
-                update(
-                    app,
-                    "Elevating privileges",
-                    Some("Answer enable password challenge with saved password"),
-                    None,
-                );
-            }
-            cli.send(password).await?;
-            let (response, _, _) = cli.receive(None, false, COMMAND_TIMEOUT, None).await?;
-            match response {
-                Response::Prompt(value) => {
-                    if value != format!("{}#", cli.prompt_base()) {
-                        return Err("Enable rejected the saved password. The CLI enable password must match the stored SSH password; check EnablePassword in dummy.ps1 when using Mocked Data.".into());
-                    }
-                    value
-                }
-                _ => return Err("Unexpected enable challenge.".into()),
-            }
-        }
-        Response::Prompt(value) => value,
-    };
-    if value != format!("{}#", cli.prompt_base()) {
-        return Err("Enable returned a non-privileged prompt without requesting a password. Check the CLI interaction; no enable password was sent.".into());
-    }
+    cli.enable(password).await?;
     let mut keys_may_be_visible = false;
     let capture: Result<u64, String> = async {
         if mode == BackupMode::Unencrypted {

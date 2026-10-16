@@ -26,6 +26,9 @@ export default function WindowTitlebar({
     let disposed = false;
     let unlisten: UnlistenFn | undefined;
     let unlistenClose: UnlistenFn | undefined;
+    let unlistenPolicy: UnlistenFn | undefined;
+    void listen<string>('policy:close-blocked', ({ payload }) => toast.warning(payload))
+      .then(cleanup => { if (disposed) cleanup(); else unlistenPolicy = cleanup; }).catch(console.error);
     void listen<string>('backup:close-blocked', ({ payload }) =>
       toast.warning(payload),
     )
@@ -56,6 +59,7 @@ export default function WindowTitlebar({
       disposed = true;
       unlisten?.();
       unlistenClose?.();
+      unlistenPolicy?.();
     };
   }, []);
 

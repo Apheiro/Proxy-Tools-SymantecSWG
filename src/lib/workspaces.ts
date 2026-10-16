@@ -1,4 +1,4 @@
-import { FileCode2, Network } from 'lucide-react';
+import { FileCode2, Network, ShieldCheck } from 'lucide-react';
 
 export const WORKSPACE_STORAGE_KEY = 'home-workspace';
 export const WORKSPACES = [
@@ -13,6 +13,12 @@ export const WORKSPACES = [
     href: '/pac',
     label: 'PAC File Manager',
     icon: FileCode2,
+  },
+  {
+    id: 'policy',
+    href: '/policy',
+    label: 'Local Policy Manager',
+    icon: ShieldCheck,
   },
 ] as const;
 

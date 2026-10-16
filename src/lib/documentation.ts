@@ -15,6 +15,7 @@ export type DocumentationSlug =
   | 'trace'
   | 'traffic-analysis'
   | 'pac'
+  | 'policy'
   | 'settings'
   | 'storage';
 
@@ -63,7 +64,7 @@ export const documentationTopics: Record<DocumentationSlug, Topic> = {
         id: 'workspaces',
         title: 'Workspace switcher',
         paragraphs: [
-          'The shared workspace selector navigates between /proxies and /pac while keeping the same layout. Home reopens the last selected workspace, defaulting to Proxies. PAC sources refer to the same registered proxy inventory; they do not create duplicate appliance records. Inventory and workspace selection persist in WebView localStorage.',
+          'The shared workspace selector navigates between /proxies, /pac and /policy while keeping the same layout. Home reopens the last selected workspace, defaulting to Proxies. PAC sources refer to the same registered proxy inventory; they do not create duplicate appliance records. Inventory and workspace selection persist in WebView localStorage.',
         ],
       },
     ],
@@ -324,6 +325,16 @@ export const documentationTopics: Record<DocumentationSlug, Topic> = {
           ],
         ],
       },
+    ],
+  },
+  policy: {
+    title: 'Local Policy Manager',
+    description: 'Independent central-file editing and direct CPL distribution over SSH.',
+    sections: [
+      { id: 'methods', title: 'Choose a source', paragraphs: ['Open /policy from the workspace switcher. Direct editing uses the existing appliance inventory and credentials. Central SSH file editing is disabled by default; enable and configure its server, absolute path, POSIX/PowerShell shell and separate password in Settings. Enabling central editing makes it the preferred method without disabling direct operations. Central file distribution remains external to this app.'] },
+      { id: 'inspection', title: 'Inspect before distribution', paragraphs: ['Inspect all configured proxies, then select a readable reference. A strict majority is only a comparison baseline, not automatically trusted policy. Red discrepancies, unreadable sources and unreachable proxies are excluded from bulk selection. Compare sources before editing. Explicit reference override chooses another proxy source; individual replacement is a separate confirmation for one excluded, readable proxy.'] },
+      { id: 'replace', title: 'Review complete replacements', paragraphs: ['The visual editor is the default, with full-width rules and reusable condition/action objects below proxy inspection. Rules and object lists are virtualized. Optional CPL source mode shares the same draft and warns that manual edits may diverge from visually generated structure. Comments and unknown CPL are retained. Gesture suggestions and imported/custom expressions are available; this is not a complete version-specific SGOS catalogue. Structural checks do not replace the SGOS compiler. Review the diff and destinations before confirmation. The native service rechecks the complete census and each destination before inline replacement, then requires compiler success and matching readback. Concurrent changes abort pending work. Successful targets are not rolled back if later targets fail. The CLI cannot offer atomic compare-and-swap against another administrator.'] },
+      { id: 'files', title: 'Central files and development', paragraphs: ['Central files are edited using SSH scripts, without SFTP. Saves take a remote advisory lock, compare original bytes, replace atomically and verify readback. POSIX requires standard file/base64 utilities; Windows requires PowerShell and a filesystem supporting File.Replace. Live passwords use Windows Credential Manager; Mock central passwords use a separate localStorage entry. All Mock SSH targets are forced to localhost:2222. The appliance dummy must support source reads, arbitrary inline delimiters and readback. CPL cannot reconstruct VPM XML projects.'] },
     ],
   },
   settings: {

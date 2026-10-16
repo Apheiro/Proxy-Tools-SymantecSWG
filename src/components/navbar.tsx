@@ -117,6 +117,7 @@ import ConfigMenu from './configmenu';
 const LABELS: Record<string, string> = {
   proxies: 'Proxy Workspace',
   pac: 'PAC File Manager',
+  policy: 'Local Policy Manager',
   editor: 'Source editor',
   BackupManager: 'Backup Manager',
   SSH: 'SSH console',

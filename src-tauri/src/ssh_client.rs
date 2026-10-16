@@ -167,6 +167,62 @@ impl SshConnection {
         }
         Ok(channel)
     }
+    /// Non-interactive scripts use a channel without a PTY and require exit status zero.
+    pub(crate) async fn execute(
+        &self,
+        command: &str,
+        input: &[u8],
+        limit: usize,
+    ) -> Result<Vec<u8>, String> {
+        let mut channel = bounded(
+            self.handle.channel_open_session(),
+            self.options.operation_timeout,
+        )
+        .await?;
+        bounded(channel.exec(true, command), self.options.operation_timeout).await?;
+        let mut writer = channel.make_writer();
+        let sender = async {
+            writer
+                .write_all(input)
+                .await
+                .map_err(|_| "SSH script upload failed.".to_string())?;
+            writer
+                .shutdown()
+                .await
+                .map_err(|_| "SSH script EOF failed.".to_string())
+        };
+        let receiver = async {
+            let mut output = Vec::new();
+            let mut status = None;
+            let mut stderr = false;
+            while let Some(message) = channel.wait().await {
+                match message {
+                    ChannelMsg::Data { data } => {
+                        if output.len() + data.len() > limit {
+                            return Err(
+                                "SSH output exceeds the document limit; output was not truncated."
+                                    .into(),
+                            );
+                        }
+                        output.extend_from_slice(&data);
+                    }
+                    ChannelMsg::ExtendedData { .. } => stderr = true,
+                    ChannelMsg::ExitStatus { exit_status } => status = Some(exit_status),
+                    ChannelMsg::Close => break,
+                    _ => (),
+                }
+            }
+            match status { Some(0) if !stderr=>Ok(output), Some(73)=>Err("Remote file is locked by another editor.".into()), Some(74)=>Err("Remote file changed. Reload and compare before saving.".into()), _=>Err("Remote script failed. Check the shell, path, permissions and required utilities. Original file was not deliberately removed.".into()) }
+        };
+        let (_, output) = timeout(Duration::from_secs(120), async {
+            tokio::try_join!(sender, receiver)
+        })
+        .await
+        .map_err(|_| {
+            "SSH script timed out; reload the remote file to verify its state.".to_string()
+        })??;
+        Ok(output)
+    }
     pub(crate) async fn disconnect(&self) -> Result<(), String> {
         bounded(
             self.handle
@@ -569,6 +625,77 @@ impl Cli {
         }
         Ok(())
     }
+    /// Full capture with an explicit size limit; never returns a truncated document.
+    pub(crate) async fn capture(&mut self, command: &str, limit: usize) -> Result<String, String> {
+        self.send(command).await?;
+        let mut data = LimitedOutput(Vec::new(), limit);
+        self.receive(Some(&mut data), false, Duration::from_secs(120), None)
+            .await?;
+        let text =
+            String::from_utf8(data.0).map_err(|_| "SSH source is not UTF-8 text.".to_string())?;
+        let text = terminal_text(&text).into_owned();
+        let mut offset = 0;
+        let mut source_start = 0;
+        for line in text.split_inclusive('\n') {
+            offset += line.len();
+            if line.trim().is_empty() {
+                continue;
+            }
+            if line.trim() == command
+                || line.trim() == format!("{}{}", self.current_prompt, command)
+                || line.trim() == format!("{} {}", self.current_prompt, command)
+            {
+                source_start = offset;
+            }
+            break;
+        }
+        let text = text[source_start..].to_owned();
+        if command_failed(&text) {
+            return Err("Appliance rejected the source command.".into());
+        }
+        Ok(text)
+    }
+    pub(crate) async fn enable(&mut self, password: &str) -> Result<(), String> {
+        self.receive(None, false, Duration::from_secs(30), None)
+            .await?;
+        self.send("enable").await?;
+        let (response, _, _) = self
+            .receive(None, true, Duration::from_secs(30), None)
+            .await?;
+        let response = if matches!(response, Response::Password) {
+            self.send(password).await?;
+            self.receive(None, false, Duration::from_secs(30), None)
+                .await?
+                .0
+        } else {
+            response
+        };
+        if !matches!(response,Response::Prompt(ref p) if p==&format!("{}#",self.prompt_base())) {
+            return Err("Enable rejected the saved password.".into());
+        }
+        Ok(())
+    }
+    /// Upload while consuming output so neither side blocks on the SSH window.
+    pub(crate) async fn upload_capture(
+        &mut self,
+        command: &str,
+        input: &[u8],
+        limit: usize,
+    ) -> Result<String, String> {
+        self.send(command).await?;
+        let mut writer = self.channel.make_writer();
+        let send = async {
+            writer.write_all(input).await.map_err(|_| {
+                "SSH upload failed; inspect the remote state before retrying.".to_string()
+            })
+        };
+        let mut response = LimitedOutput(Vec::new(), limit);
+        tokio::try_join!(
+            send,
+            self.receive(Some(&mut response), false, Duration::from_secs(120), None)
+        )?;
+        String::from_utf8(response.0).map_err(|_| "SSH response is not UTF-8.".into())
+    }
     pub(crate) fn prompt_base(&self) -> &str {
         &self.base
     }
@@ -645,5 +772,34 @@ mod tests {
         assert!(PromptPolicy::new("[", &["#"]).is_err());
         assert!(PromptPolicy::new(r"^device#$", &["#"]).is_err());
         assert!(PromptPolicy::new(r"^(device)#$", &[]).is_err());
+    }
+}
+
+struct LimitedOutput(Vec<u8>, usize);
+impl AsyncWrite for LimitedOutput {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        if self.0.len() + buf.len() > self.1 {
+            return std::task::Poll::Ready(Err(std::io::Error::other(
+                "SSH output exceeds its configured capture limit; capture was rejected.",
+            )));
+        }
+        self.0.extend_from_slice(buf);
+        std::task::Poll::Ready(Ok(buf.len()))
+    }
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
     }
 }

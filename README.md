@@ -12,6 +12,7 @@ Built with **Tauri 2 and Rust** for native operations, and **Next.js, React and 
 - Create and browse configuration backups over SSH.
 - Interact with appliances through an SSH console with session command history and collapsible output.
 - Manage PAC/WPAD file sources and routing rules.
+- Edit central CPL files over SSH or inspect, compare and distribute Local Policy directly to proxies.
 - Check releases and download updates for manual executable replacement.
 
 ## Development requirements
@@ -82,6 +83,7 @@ pnpm exec playwright test
 
 - [Backup Manager](docs/backup-manager.md)
 - [SSH console](docs/ssh-console.md)
+- [Local Policy Manager](docs/local-policy-manager.md)
 - [Connectivity and DNS resolution](docs/native-proxy-networking.md)
 - [Downloading updates](docs/app-updates.md)
 - [Versioning and releases](docs/releases.md)

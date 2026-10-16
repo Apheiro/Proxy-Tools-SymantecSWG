@@ -41,6 +41,7 @@ import {
 import useDataSourceMode from '@/lib/useDataSourceMode';
 import { getLocalStorage, postLocalStorage } from '@/lib/utilsClient';
 import UpdateSettings from '@/components/updateSettings';
+import PolicySettings from '@/components/policySettings';
 
 const credentialSchema = v.object({
   username: v.pipe(
@@ -284,6 +285,7 @@ function SettingsDialog({
               </form>
             </section>
             <UpdateSettings key={mode} mode={mode} />
+            <PolicySettings key={`policy-${mode}`} mode={mode} />
           </div>
         </div>
       </ScrollArea>

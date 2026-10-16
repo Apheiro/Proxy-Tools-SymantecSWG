@@ -31,3 +31,6 @@ src-tauri/target
 /test-results/
 /playwright-report/
 /.next-e2e/
+
+# Downloaded appliance reference (contains real session/configuration metadata)
+/PROXY VPM PAGE/
