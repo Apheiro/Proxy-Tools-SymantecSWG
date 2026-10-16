@@ -1,7 +1,17 @@
 import { useForm } from '@mantine/form';
 import { invoke } from '@tauri-apps/api/core';
 import dayjs from 'dayjs';
-import { AlertCircle, MoreHorizontal, Tags, Terminal } from 'lucide-react';
+import {
+  AlertCircle,
+  AppWindow,
+  MoreHorizontal,
+  ScrollText,
+  Stethoscope,
+  Tags,
+  Terminal,
+  Trash2,
+  Workflow,
+} from 'lucide-react';
 import { valibotResolver } from 'mantine-form-valibot-resolver';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -388,9 +398,11 @@ export default function ProxyCard({
               onClick={() => setOpenAlert(true)}
               variant='destructive'
             >
+              <Trash2 className='size-4' />
               Delete
             </DropdownMenuItem>
             <DropdownMenuItem onClick={() => setOpenLog(true)}>
+              <ScrollText className='size-4' />
               Ping log
             </DropdownMenuItem>
             <DropdownMenuItem
@@ -400,14 +412,16 @@ export default function ProxyCard({
                 );
               }}
             >
-              Open vpm (Early)
+              <Workflow className='size-4' />
+              Open VPM
             </DropdownMenuItem>
             <DropdownMenuItem
               onClick={() => {
                 openProxy(`https://${proxyAddress}:8082/`);
               }}
             >
-              Open admin console (Early)
+              <AppWindow className='size-4' />
+              Open admin console
             </DropdownMenuItem>
 
             <DropdownMenuItem asChild>
@@ -427,6 +441,7 @@ export default function ProxyCard({
                   query: { proxy: proxyAddress },
                 }}
               >
+                <Stethoscope className='size-4' />
                 Diagnostic tools
               </Link>
             </DropdownMenuItem>
