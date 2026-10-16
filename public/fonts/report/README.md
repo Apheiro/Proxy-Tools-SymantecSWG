@@ -1,0 +1,1 @@
+Static 400/600 instances derived from Google Fonts Noto Sans (wght=400/600, wdth=100), renamed ProxyToolsReport. Distributed under the included SIL Open Font License. Source: https://github.com/google/fonts/tree/main/ofl/notosans

@@ -1,12 +1,13 @@
 'use client';
 
-import { invoke } from '@tauri-apps/api/core';
+import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import {
   Activity,
   BookOpen,
   ChevronDown,
   CircleAlert,
+  Download,
   FileUp,
   LoaderCircle,
   Radio,
@@ -23,13 +24,8 @@ import {
   useState,
 } from 'react';
 import { toast } from 'sonner';
-import { cva } from '@/lib/cva';
-import {
-  disclosureIconStyles,
-  refreshStyles,
-} from '@/lib/uiVariants';
-import PageHeader from '@/components/pageHeader';
 import BackgroundRefresh from '@/components/backgroundRefresh';
+import PageHeader from '@/components/pageHeader';
 import TrafficTimeline from '@/components/trafficTimeline';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -43,6 +39,7 @@ import { DateTimePicker } from '@/components/ui/date-time-picker';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { SelectField, SelectOption } from '@/components/ui/select';
 import { useCredentialRevision } from '@/lib/credentialStore';
+import { cva } from '@/lib/cva';
 import { dateTimeToISO, isoToDateTime } from '@/lib/dateTime';
 import getCredentials from '@/lib/getCredentials';
 import { useScrapedData } from '@/lib/scrapingCache';
@@ -66,6 +63,14 @@ import {
   type CaptureStreamStatus,
   emptyCaptureFilters,
 } from '@/lib/trafficCapture';
+import {
+  collectTrafficReport,
+  trafficReportPalette,
+} from '@/lib/trafficReport';
+import {
+  disclosureIconStyles,
+  refreshStyles,
+} from '@/lib/uiVariants';
 import useDataSourceMode from '@/lib/useDataSourceMode';
 import useTrafficCapture from '@/lib/useTrafficCapture';
 
@@ -130,6 +135,9 @@ export default function TrafficAnalysisWorkspace({
     null,
   );
   const [queryBusy, setQueryBusy] = useState(false);
+  const [exportingPdf, setExportingPdf] = useState(false);
+  const [exportMessage, setExportMessage] = useState('');
+  const exportController = useRef<AbortController | null>(null);
   const [resolvedQuery, setResolvedQuery] = useState('');
   const [queryError, setQueryError] = useState('');
   const [logs, setLogs] = useState<AccessLogSource[]>([]);
@@ -152,6 +160,12 @@ export default function TrafficAnalysisWorkspace({
     ['connecting', 'streaming'].includes(stream?.status ?? '');
   const captureId =
     capture.dataset?.captureId ?? stream?.captureId ?? '';
+  useEffect(
+    () => () => {
+      exportController.current?.abort();
+    },
+    [captureId],
+  );
   const formatTime = useMemo(
     () => createTrafficTimeFormatter(zone),
     [zone],
@@ -183,6 +197,8 @@ export default function TrafficAnalysisWorkspace({
     setPage(1);
     setAnalysis(null);
     setSavedId('');
+    setExportingPdf(false);
+    setExportMessage('');
     setRange({ start: null, end: null });
   }, [captureId]);
   useEffect(() => {
@@ -488,6 +504,112 @@ export default function TrafficAnalysisWorkspace({
         : { start: fullEnd - minutes * 60000, end: fullEnd },
     );
 
+  const exportPdf = async () => {
+    const dataset = capture.dataset;
+    if (
+      !dataset ||
+      !captureId ||
+      exportingPdf ||
+      capture.busy ||
+      active ||
+      stopping
+    )
+      return;
+    const controller = new AbortController();
+    exportController.current = controller;
+    setExportingPdf(true);
+    setExportMessage('Preparing PDF export…');
+    try {
+      // All selection, theme and source values are snapshotted before asynchronous work.
+      const report = await collectTrafficReport(
+        {
+          proxy,
+          source: dataset.source,
+          captureId,
+          generatedAt: new Date().toISOString(),
+          timeZone: zone,
+          theme: document.documentElement.classList.contains('dark')
+            ? 'dark'
+            : 'light',
+          palette: trafficReportPalette(),
+          filters: { ...filters },
+          range: { ...range },
+          metric,
+          availability: dataset.fieldAvailability,
+          receivedLines: dataset.receivedLines,
+          processedRecords: dataset.recordsProcessed,
+        },
+        (query) =>
+          invoke<CaptureResult>('query_traffic_capture', {
+            captureId,
+            query,
+          }),
+        controller.signal,
+        setExportMessage,
+      );
+      setExportMessage('Rendering PDF pages…');
+      const { trafficReportBlob } = await import(
+        '@/components/pdf/trafficReportDocument'
+      );
+      if (controller.signal.aborted) return;
+      const blob = await trafficReportBlob(report);
+      if (controller.signal.aborted) return;
+      const filename = `traffic-analysis-${report.generatedAt.replace(/[:.]/g, '-')}-${report.theme}.pdf`;
+      if (isTauri()) {
+        setExportMessage('Saving PDF…');
+        const path = await invoke<string>('save_traffic_pdf', {
+          filename,
+          bytes: Array.from(new Uint8Array(await blob.arrayBuffer())),
+        });
+        toast.success('PDF saved.', {
+          description: path,
+          duration: 15000,
+          action: {
+            label: 'Open folder',
+            onClick: () => {
+              void invoke('open_traffic_pdf', {
+                filename,
+                folder: true,
+              }).catch((error) =>
+                toast.error(
+                  `Could not open report folder: ${String(error)}`,
+                ),
+              );
+            },
+          },
+        });
+        await invoke('open_traffic_pdf', {
+          filename,
+          folder: false,
+        }).catch((error) =>
+          toast.error(
+            `PDF saved, but could not open the viewer: ${String(error)}`,
+          ),
+        );
+      } else {
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = filename;
+        document.body.append(anchor);
+        anchor.click();
+        anchor.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 30000);
+        toast.success('Traffic analysis PDF downloaded.');
+      }
+    } catch (error) {
+      if (!controller.signal.aborted)
+        toast.error(`Could not export PDF: ${String(error)}`);
+    } finally {
+      if (
+        exportController.current === controller &&
+        !controller.signal.aborted
+      ) {
+        setExportingPdf(false);
+        setExportMessage('');
+      }
+    }
+  };
   return (
     <main
       className={refreshStyles({
@@ -507,6 +629,14 @@ export default function TrafficAnalysisWorkspace({
               : 'Refreshing traffic analysis…'
         }
       />
+      {exportingPdf && (
+        <output
+          className='text-xs text-muted-foreground'
+          aria-live='polite'
+        >
+          {exportMessage}
+        </output>
+      )}
       <PageHeader
         icon={Activity}
         eyebrow='Proxy diagnostics'
@@ -519,6 +649,32 @@ export default function TrafficAnalysisWorkspace({
         }
         actions={
           <div className='flex flex-wrap items-center gap-2'>
+            <Button
+              size='sm'
+              variant='outline'
+              disabled={
+                !captureId ||
+                !capture.dataset ||
+                capture.busy ||
+                active ||
+                stopping ||
+                exportingPdf ||
+                analysisLoading
+              }
+              onClick={() => void exportPdf()}
+              title={
+                active
+                  ? 'Stop the live capture before exporting a consistent report.'
+                  : 'Export full capture statistics, the selected scope and concentrated peaks.'
+              }
+            >
+              {exportingPdf ? (
+                <LoaderCircle className='size-4 animate-spin' />
+              ) : (
+                <Download className='size-4' />
+              )}
+              {exportingPdf ? 'Exporting PDF…' : 'Export PDF'}
+            </Button>
             <Link href='/documentation/traffic-analysis'>
               <Button variant='ghost' size='sm'>
                 <BookOpen className='size-4' />
@@ -869,10 +1025,14 @@ export default function TrafficAnalysisWorkspace({
                       id={rangeControlsId}
                       className='flex flex-wrap items-end gap-2'
                     >
-                      <label className='space-y-1 text-xs text-muted-foreground'>
+                      <label
+                        htmlFor={`${rangeControlsId}-metric`}
+                        className='space-y-1 text-xs text-muted-foreground'
+                      >
                         Chart and ranking metric
                         <SelectField
                           value={metric}
+                          id={`${rangeControlsId}-metric`}
                           aria-label='Chart and ranking metric'
                           onValueChange={(selectedValue) =>
                             setMetric(
@@ -1026,6 +1186,7 @@ export default function TrafficAnalysisWorkspace({
                     ).map((name) => (
                       <label
                         key={name}
+                        htmlFor={`${filterControlsId}-${name}`}
                         className='space-y-1 text-xs capitalize text-muted-foreground'
                       >
                         {name === 'host'
@@ -1033,6 +1194,7 @@ export default function TrafficAnalysisWorkspace({
                           : name}
                         <input
                           className={`${INPUT} block w-full`}
+                          id={`${filterControlsId}-${name}`}
                           value={filters[name]}
                           onChange={(event) =>
                             filter(name, event.target.value)
@@ -1051,11 +1213,13 @@ export default function TrafficAnalysisWorkspace({
                     ).map(([name, field]) => (
                       <label
                         key={name}
+                        htmlFor={`${filterControlsId}-${name}`}
                         className='space-y-1 text-xs capitalize text-muted-foreground'
                       >
                         {name}
                         <SelectField
                           className='w-full'
+                          id={`${filterControlsId}-${name}`}
                           value={filters[name]}
                           onValueChange={(selectedValue) =>
                             filter(name, selectedValue)
@@ -1178,9 +1342,13 @@ export default function TrafficAnalysisWorkspace({
                     {(tab === 'Overview' || tab === 'Rankings') && (
                       <>
                         <div className='flex justify-end gap-2'>
-                          <label className='flex items-center gap-2 text-sm'>
+                          <label
+                            htmlFor={`${rangeControlsId}-ranking`}
+                            className='flex items-center gap-2 text-sm'
+                          >
                             Ranking size
                             <SelectField
+                              id={`${rangeControlsId}-ranking`}
                               value={limit}
                               onValueChange={(selectedValue) =>
                                 setLimit(Number(selectedValue))
