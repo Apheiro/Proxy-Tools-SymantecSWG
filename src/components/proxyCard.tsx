@@ -1,7 +1,14 @@
 import { useForm } from '@mantine/form';
 import { invoke } from '@tauri-apps/api/core';
 import dayjs from 'dayjs';
-import { AlertCircle, MoreHorizontal, Tags, Terminal } from 'lucide-react';
+import {
+  AlertCircle,
+  AppWindow,
+  MoreHorizontal,
+  Tags,
+  Terminal,
+  Workflow,
+} from 'lucide-react';
 import { valibotResolver } from 'mantine-form-valibot-resolver';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -400,14 +407,16 @@ export default function ProxyCard({
                 );
               }}
             >
-              Open vpm (Early)
+              <Workflow className='size-4' />
+              Open VPM
             </DropdownMenuItem>
             <DropdownMenuItem
               onClick={() => {
                 openProxy(`https://${proxyAddress}:8082/`);
               }}
             >
-              Open admin console (Early)
+              <AppWindow className='size-4' />
+              Open admin console
             </DropdownMenuItem>
 
             <DropdownMenuItem asChild>
