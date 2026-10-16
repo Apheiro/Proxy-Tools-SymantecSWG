@@ -28,6 +28,11 @@ import { Input } from '@/components/ui/input';
 import { SelectField, SelectOption } from '@/components/ui/select';
 import getCredentials from '@/lib/getCredentials';
 import {
+  getProxyPrimaryAddress,
+  mergeProxyCheck,
+  normalizeProxyIdentity,
+} from '@/lib/proxyIdentity';
+import {
   groupProxies,
   inventoryProxyId,
   inventoryTags,
@@ -47,113 +52,6 @@ const schema = v.object({
     v.nonEmpty('Please enter a valid hostname before proceeding.'),
   ),
 });
-
-function knownProxyValue(value?: string) {
-  const normalized = value?.trim();
-  const normalizedLowercase = normalized?.toLowerCase();
-  return normalized &&
-    normalizedLowercase !== 'unknown' &&
-    normalizedLowercase !== 'unkown'
-    ? normalized
-    : undefined;
-}
-
-function isIpAddress(value?: string) {
-  if (!value || value.trim() !== value || /\s/.test(value))
-    return false;
-  if (value.includes(':')) {
-    try {
-      return new URL(`http://[${value}]/`).hostname.length > 0;
-    } catch {
-      return false;
-    }
-  }
-  const octets = value.split('.');
-  return (
-    octets.length === 4 &&
-    octets.every(
-      (octet) =>
-        /^\d{1,3}$/.test(octet) &&
-        Number(octet) >= 0 &&
-        Number(octet) <= 255,
-    )
-  );
-}
-
-function getLoggedHostname(proxy: Proxy) {
-  const pingTarget = proxy.pinglog?.match(
-    /Pinging\s+([^\s[]+)(?:\s+\[([^\]]+)\])?/i,
-  )?.[1];
-  if (knownProxyValue(pingTarget) && !isIpAddress(pingTarget)) {
-    return pingTarget;
-  }
-
-  const dnsQuery = proxy.nslookup?.match(
-    /can't find\s+([^\s:]+)/i,
-  )?.[1];
-  return knownProxyValue(dnsQuery) && !isIpAddress(dnsQuery)
-    ? dnsQuery
-    : undefined;
-}
-
-function getProxyPrimaryAddress(proxy: Proxy) {
-  const primaryAddress = knownProxyValue(proxy.primary_address);
-  if (primaryAddress) return primaryAddress;
-
-  const resolvedIp = knownProxyValue(proxy.hostinfo?.ip);
-  if (isIpAddress(resolvedIp)) return resolvedIp;
-
-  const registeredAddress = knownProxyValue(proxy.registered_address);
-  if (registeredAddress) return registeredAddress;
-
-  const hostname = knownProxyValue(proxy.hostname);
-  if (hostname) return hostname;
-
-  const pingTarget = proxy.pinglog?.match(
-    /Pinging\s+([^\s[]+)(?:\s+\[([^\]]+)\])?/i,
-  );
-  if (isIpAddress(pingTarget?.[2])) return pingTarget?.[2];
-  if (knownProxyValue(pingTarget?.[1])) return pingTarget?.[1];
-
-  const dnsQuery = proxy.nslookup?.match(
-    /can't find\s+([^\s:]+)/i,
-  )?.[1];
-  return knownProxyValue(dnsQuery) ?? null;
-}
-
-function mergeProxyCheck(previous: Proxy, check: Proxy): Proxy {
-  const keepKnown = (latest?: string, saved?: string) =>
-    knownProxyValue(latest) ?? knownProxyValue(saved) ?? 'unknown';
-  const checkedPrimary = knownProxyValue(check.primary_address);
-
-  return {
-    ...previous,
-    ...check,
-    hostname: keepKnown(check.hostname, previous.hostname),
-    registered_address:
-      knownProxyValue(previous.registered_address) ??
-      knownProxyValue(check.registered_address) ??
-      knownProxyValue(previous.hostname) ??
-      knownProxyValue(check.hostname),
-    primary_address:
-      checkedPrimary ?? getProxyPrimaryAddress(previous) ?? undefined,
-    hostinfo: {
-      hostname: keepKnown(
-        check.hostinfo?.hostname,
-        previous.hostinfo?.hostname,
-      ),
-      ip: keepKnown(check.hostinfo?.ip, previous.hostinfo?.ip),
-      dnsname: keepKnown(
-        check.hostinfo?.dnsname,
-        previous.hostinfo?.dnsname,
-      ),
-      dnsip: keepKnown(
-        check.hostinfo?.dnsip,
-        previous.hostinfo?.dnsip,
-      ),
-    },
-  };
-}
 
 export default function Page() {
   const addTitleId = useId();
@@ -185,36 +83,9 @@ export default function Page() {
       }).some((group) => group.key === tag);
       setGrouping({ groupBy: 'tags', tag: validTag ? tag : '' });
     }
-    const normalizedProxies = storedProxies.map((proxy) => {
-      const recoveredHostname =
-        knownProxyValue(proxy.hostname) ??
-        knownProxyValue(proxy.hostinfo?.hostname) ??
-        getLoggedHostname(proxy);
-      const primaryAddress = getProxyPrimaryAddress(proxy);
-
-      return {
-        ...proxy,
-        registered_address:
-          knownProxyValue(proxy.registered_address) ??
-          recoveredHostname ??
-          primaryAddress ??
-          undefined,
-        primary_address: primaryAddress ?? proxy.primary_address,
-        hostname: recoveredHostname ?? proxy.hostname,
-        hostinfo: {
-          ...proxy.hostinfo,
-          hostname:
-            knownProxyValue(proxy.hostinfo?.hostname) ??
-            recoveredHostname ??
-            'unknown',
-          ip:
-            knownProxyValue(proxy.hostinfo?.ip) ??
-            (isIpAddress(primaryAddress)
-              ? primaryAddress
-              : 'unknown'),
-        },
-      };
-    });
+    const normalizedProxies = storedProxies.map(
+      normalizeProxyIdentity,
+    );
     setProxies(normalizedProxies);
     if (
       normalizedProxies.some(
@@ -252,7 +123,7 @@ export default function Page() {
         const check = await invoke<Proxy>('getproxystatus', {
           hostname: address,
         });
-        return mergeProxyCheck(proxy, check);
+        return check;
       }),
     )
       .then((result) => {
@@ -264,7 +135,7 @@ export default function Page() {
             );
             return index < 0
               ? proxy
-              : { ...result[index], tags: proxy.tags };
+              : mergeProxyCheck(proxy, result[index]);
           });
           postLocalStorage('proxies', updated);
           return updated;
