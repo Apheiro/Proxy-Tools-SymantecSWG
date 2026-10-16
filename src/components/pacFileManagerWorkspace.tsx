@@ -313,7 +313,7 @@ export default function PacFileManagerWorkspace({
     postLocalStorage(STORAGE_KEY, [...sources, source]);
     setSources((current) => [...current, source]);
     setSelectedId(id);
-      router.replace(`/pac?sourceId=${encodeURIComponent(id)}`);
+      router.replace(`/pac/editor?sourceId=${encodeURIComponent(id)}`);
   }, [loadedSources, mode, editorSourceId, router, sources]);
   useEffect(() => {
     if (loadedSources) postLocalStorage(STORAGE_KEY, sources);
@@ -495,11 +495,11 @@ export default function PacFileManagerWorkspace({
     setName('');
     setUrl('');
     await synchronize(source);
-    router.push(`/pac?sourceId=${encodeURIComponent(source.id)}`);
+    router.push(`/pac/editor?sourceId=${encodeURIComponent(source.id)}`);
   };
 
   const createSourceFromScratch = () => {
-    router.push('/pac?new=1');
+    router.push('/pac/editor?new=1');
   };
 
   const addGroup = () => {
@@ -537,7 +537,7 @@ export default function PacFileManagerWorkspace({
       setSelectedId(
         sources.find((item) => item.id !== source.id)?.id ?? '',
       );
-    if (mode === 'edit') router.push('/');
+    if (mode === 'edit') router.push('/pac');
   };
   const addRule = () => {
     if (!selected || selected.parseError) return;
@@ -949,7 +949,7 @@ export default function PacFileManagerWorkspace({
                     </div>
                     <div className='flex flex-wrap justify-end gap-2'>
                       {source.url && <Button variant='outline' size='sm' disabled={loading} onClick={() => synchronize(source)}><RefreshCcw className='size-4' />Sync</Button>}
-                      <Button size='sm' onClick={() => router.push(`/pac?sourceId=${encodeURIComponent(source.id)}`)}><Pencil className='size-4' />Edit source</Button>
+                      <Button size='sm' onClick={() => router.push(`/pac/editor?sourceId=${encodeURIComponent(source.id)}`)}><Pencil className='size-4' />Edit source</Button>
                       <Button variant='ghost' size='icon' aria-label={`Delete ${source.name}`} onClick={() => removeSource(source)}><Trash2 className='size-4' /></Button>
                     </div>
                   </CardContent>

@@ -63,7 +63,7 @@ export const documentationTopics: Record<DocumentationSlug, Topic> = {
         id: 'workspaces',
         title: 'Workspace switcher',
         paragraphs: [
-          'Home switches between Proxy Workspace and PAC File Manager. PAC sources refer to the same registered proxy inventory; they do not create duplicate appliance records. Inventory and workspace selection persist in WebView localStorage.',
+          'The shared workspace selector navigates between /proxies and /pac while keeping the same layout. Home reopens the last selected workspace, defaulting to Proxies. PAC sources refer to the same registered proxy inventory; they do not create duplicate appliance records. Inventory and workspace selection persist in WebView localStorage.',
         ],
       },
     ],
@@ -289,7 +289,7 @@ export const documentationTopics: Record<DocumentationSlug, Topic> = {
         id: 'sources',
         title: 'Sources and synchronization',
         paragraphs: [
-          'Home lists registered PAC sources, origin URLs, connection/sync state, last synchronization and rule counts. Open a source or create one from scratch to navigate to /pac?sourceId=... or /pac?new=1. These are static routes with query parameters.',
+          '/pac lists registered PAC sources, origin URLs, connection/sync state, last synchronization and rule counts. Open a source or create one from scratch to navigate to /pac/editor?sourceId=... or /pac/editor?new=1. These are static routes with query parameters.',
           'Synchronization GETs the source URL and compares content hashes against the baseline. States distinguish synchronized, local changes, remote changes, conflict and offline. A remote change with local edits is preserved for explicit handling, not silently substituted. Arbitrary PAC JavaScript that cannot be safely interpreted stays read-only with its original content available.',
         ],
       },

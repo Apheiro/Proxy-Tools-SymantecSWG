@@ -44,7 +44,7 @@ const screens = [
     label: 'Appliance backups',
   },
   {
-    route: '/pac?new=1',
+    route: '/pac/editor?new=1',
     title: 'PAC Source Editor',
     label: 'PAC File Manager / Source editor',
   },
@@ -170,7 +170,7 @@ for (const mobile of [false, true]) {
         });
       if (screen.title === 'Proxy workspace') {
         await page
-          .getByRole('button', {
+          .getByRole('link', {
             name: 'PAC File Manager',
             exact: true,
           })
