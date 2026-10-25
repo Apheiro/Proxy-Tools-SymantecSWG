@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.5.0](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/compare/v0.4.0...v0.5.0) (2026-10-25)
+
+
+### Features
+
+* **browser:** manage retained embedded pages with a grouped dock ([930d51b](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/commit/930d51b969a5cea36df2b54f39e6aa2557207375))
+* **settings:** organize categories and configure shortcuts and proxy menus ([d6f03ce](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/commit/d6f03ceb8ce800a8325e02957228a17848525f99))
+
+
+### Bug Fixes
+
+* **navigation:** restore workspace scroll when returning to a route ([cd60453](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/commit/cd60453857501cbea0cc0e538d1cefcf65f387c9))
+* **proxies:** list untagged appliances before tagged groups ([2b182b6](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/commit/2b182b655a677cf4650c212c9341e9c897b1e389))
+* **updates:** use opaque notifications below embedded page overlays ([19c0430](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/commit/19c0430ab137407b425a464fde91366778345308))
+
 ## [0.4.0](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/compare/v0.3.1...v0.4.0) (2026-10-16)
 
 
