@@ -4,7 +4,7 @@ The inventory is a JSON array in the main webview's **localStorage key `proxies`
 
 The inventory currently uses the same key in Live and Mocked Data. Credential profile separation does not imply separate proxy inventories. Development and packaged builds can have separate web origins and webview profiles.
 
-On Windows, the configured identifier is `com.apheiros.proxytools`. With no custom data directory, the installed Tauri 2.8.5 webview manager chooses the platform's LocalData directory joined with that identifier: `%LOCALAPPDATA%\com.apheiros.proxytools`. WebView2 manages the internal browser-profile files containing localStorage. Do not treat them as a standalone `proxies.json` file or edit their database while the application runs. This fix does not change that directory, identifier or storage schema.
+On Windows, the configured identifier is `com.apheiros.proxytools`. With no custom data directory, the installed Tauri 2.12.5 webview manager chooses the platform's LocalData directory joined with that identifier: `%LOCALAPPDATA%\com.apheiros.proxytools`. WebView2 manages the internal browser-profile files containing localStorage. Do not treat them as a standalone `proxies.json` file or edit their database while the application runs. This fix does not change that directory, identifier or storage schema.
 
 ## Identity fields
 
