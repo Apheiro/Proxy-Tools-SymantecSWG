@@ -51,6 +51,13 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import ProxyTagsEditor from '@/components/proxyTagsEditor';
 import { useEmbeddedBrowser } from '@/components/embedded-browser/provider';
+import { useAppPreferences } from '@/lib/appPreferences';
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from '@/components/ui/context-menu';
 import { normalizeProxyTags } from '@/lib/proxyTags';
 
 const credentialSchema = v.object({
@@ -326,201 +333,242 @@ export default function ProxyCard({
     setPendingProxyUrl(null);
   };
 
-  return (
-    <Card className='h-fit w-full min-w-0 gap-4 py-4'>
-      <LogDialog
-        open={openLog}
-        setOpen={setOpenLog}
-        pingLog={proxy.pinglog}
-        hostinfo={proxy.hostinfo}
-      />
-      <DelAlert
-        open={delAlert}
-        setOpen={setOpenAlert}
-        deleteProxy={deleteProxy}
-        proxy={proxy}
-      />
-      <LoginRequiredDialog
-        open={openLogin}
-        setOpen={setOpenLogin}
-        proxyIp={proxyAddress}
-        redirection={'/Diagnostics'}
-        onCredentials={(credentials) => {
-          if (pendingProxyUrl)
-            openProxy(pendingProxyUrl, credentials);
+  const preferences = useAppPreferences();
+  const ActionItem = preferences.proxyContextMenu
+    ? ContextMenuItem
+    : DropdownMenuItem;
+  const actions = (
+    <>
+      <ActionItem asChild>
+        <Link
+          href={{
+            pathname: '/Diagnostics/SSH',
+            query: { proxy: proxyAddress },
+          }}
+        >
+          <Terminal className='size-4' />
+          SSH connection
+        </Link>
+      </ActionItem>
+      <ActionItem onSelect={() => setOpenTags(true)}>
+        <Tags className='size-4' />
+        Edit tags
+      </ActionItem>
+      <ActionItem
+        onClick={() => setOpenAlert(true)}
+        variant='destructive'
+      >
+        <Trash2 className='size-4' />
+        Delete
+      </ActionItem>
+      <ActionItem onClick={() => setOpenLog(true)}>
+        <ScrollText className='size-4' />
+        Ping log
+      </ActionItem>
+      <ActionItem
+        onClick={() => {
+          openProxy(
+            `https://${proxyAddress}:8082/Secure/Local/console/mc_vpm.html`,
+          );
         }}
-      />
-      <CardHeader className='flex flex-row items-start justify-between gap-3 px-4'>
-        <div className='min-w-0 space-y-2'>
-          <CardTitle className='flex min-w-0 items-center gap-2 text-base leading-snug'>
-            <span className='min-w-0 break-all'>
-              {proxy.hostname}
-            </span>
-            {reverseHostnameUnavailable && (
-              <TooltipOne
-                classNameContent='max-w-72'
-                content='The hostname could not be retrieved through reverse DNS lookup using a PTR record. The appliance remains identified by its IP address.'
-              >
-                <button
-                  type='button'
-                  aria-label='Hostname unavailable through reverse DNS (PTR) lookup'
-                  className='inline-flex size-6 shrink-0 items-center justify-center rounded-sm text-amber-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:text-amber-400'
-                >
-                  <AlertCircle
-                    className='size-4'
-                    aria-hidden='true'
-                  />
-                </button>
-              </TooltipOne>
-            )}
-          </CardTitle>
-          <TooltipOne
-            content={
-              proxy.active
-                ? 'ICMP Active'
-                : 'ICMP disabled or computer unreachable'
-            }
-          >
-            <Badge variant='outline'>
-              <Status status={proxy.active} />
-            </Badge>
-          </TooltipOne>
-        </div>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant='ghost'
-              size='icon'
-              className='size-8 shrink-0'
-              aria-label={`Proxy actions for ${proxy.hostname}`}
-            >
-              <MoreHorizontal className='size-4' />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent>
-            <DropdownMenuItem asChild>
-              <Link href={{ pathname: '/Diagnostics/SSH', query: { proxy: proxyAddress } }}>
-                <Terminal className='size-4' />SSH connection
-              </Link>
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => setOpenTags(true)}>
-              <Tags className='size-4' />
-              Edit tags
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onClick={() => setOpenAlert(true)}
-              variant='destructive'
-            >
-              <Trash2 className='size-4' />
-              Delete
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => setOpenLog(true)}>
-              <ScrollText className='size-4' />
-              Ping log
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onClick={() => {
-                openProxy(
-                  `https://${proxyAddress}:8082/Secure/Local/console/mc_vpm.html`,
-                );
-              }}
-            >
-              <Workflow className='size-4' />
-              Open VPM
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onClick={() => {
-                openProxy(`https://${proxyAddress}:8082/`);
-              }}
-            >
-              <AppWindow className='size-4' />
-              Open admin console
-            </DropdownMenuItem>
+      >
+        <Workflow className='size-4' />
+        Open VPM
+      </ActionItem>
+      <ActionItem
+        onClick={() => {
+          openProxy(`https://${proxyAddress}:8082/`);
+        }}
+      >
+        <AppWindow className='size-4' />
+        Open admin console
+      </ActionItem>
 
-            <DropdownMenuItem asChild>
-              <Link
-                onNavigate={(e) => {
-                  if (!modeReady) {
-                    e.preventDefault();
-                    return;
-                  }
-                  if (mode === 'live' && !getCredentials()) {
-                    e.preventDefault();
-                    setOpenLogin(true);
-                  }
-                }}
-                href={{
-                  pathname: '/Diagnostics',
-                  query: { proxy: proxyAddress },
-                }}
-              >
-                <Stethoscope className='size-4' />
-                Diagnostic tools
-              </Link>
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </CardHeader>
-      <CardContent className='space-y-3 px-4'>
-        <div className='rounded-lg bg-muted/50 px-3 py-2.5'>
-          <p className='mb-1 text-xs text-muted-foreground'>
-            IP address
-          </p>
-          <div className='font-mono text-sm'>
-            {proxy.hostinfo.ip
-              .split(/\s+/)
-              .filter(Boolean)
-              .map((ip) => (
-                <span key={ip} className='block break-all'>
-                  {ip}
+      <ActionItem asChild>
+        <Link
+          onNavigate={(e) => {
+            if (!modeReady) {
+              e.preventDefault();
+              return;
+            }
+            if (mode === 'live' && !getCredentials()) {
+              e.preventDefault();
+              setOpenLogin(true);
+            }
+          }}
+          href={{
+            pathname: '/Diagnostics',
+            query: { proxy: proxyAddress },
+          }}
+        >
+          <Stethoscope className='size-4' />
+          Diagnostic tools
+        </Link>
+      </ActionItem>
+    </>
+  );
+  return (
+    <ContextMenu modal={false}>
+      <ContextMenuTrigger
+        asChild
+        disabled={!preferences.proxyContextMenu}
+      >
+        <Card
+          tabIndex={preferences.proxyContextMenu ? 0 : undefined}
+          onContextMenuCapture={(event) => {
+            const target = event.target;
+            if (
+              target instanceof Element &&
+              (!event.currentTarget.contains(target) ||
+                target.closest(
+                  'input, textarea, [contenteditable=true]',
+                ))
+            )
+              event.stopPropagation();
+          }}
+          className='h-fit w-full min-w-0 gap-4 py-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+        >
+          <LogDialog
+            open={openLog}
+            setOpen={setOpenLog}
+            pingLog={proxy.pinglog}
+            hostinfo={proxy.hostinfo}
+          />
+          <DelAlert
+            open={delAlert}
+            setOpen={setOpenAlert}
+            deleteProxy={deleteProxy}
+            proxy={proxy}
+          />
+          <LoginRequiredDialog
+            open={openLogin}
+            setOpen={setOpenLogin}
+            proxyIp={proxyAddress}
+            redirection={'/Diagnostics'}
+            onCredentials={(credentials) => {
+              if (pendingProxyUrl)
+                openProxy(pendingProxyUrl, credentials);
+            }}
+          />
+          <CardHeader className='flex flex-row items-start justify-between gap-3 px-4'>
+            <div className='min-w-0 space-y-2'>
+              <CardTitle className='flex min-w-0 items-center gap-2 text-base leading-snug'>
+                <span className='min-w-0 break-all'>
+                  {proxy.hostname}
                 </span>
-              ))}
-          </div>
-        </div>
-        {proxy.hostinfo.ip.split(' ').length > 1 && (
-          <TooltipOne
-            content='There are multiple devices associated with this
+                {reverseHostnameUnavailable && (
+                  <TooltipOne
+                    classNameContent='max-w-72'
+                    content='The hostname could not be retrieved through reverse DNS lookup using a PTR record. The appliance remains identified by its IP address.'
+                  >
+                    <button
+                      type='button'
+                      aria-label='Hostname unavailable through reverse DNS (PTR) lookup'
+                      className='inline-flex size-6 shrink-0 items-center justify-center rounded-sm text-amber-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:text-amber-400'
+                    >
+                      <AlertCircle
+                        className='size-4'
+                        aria-hidden='true'
+                      />
+                    </button>
+                  </TooltipOne>
+                )}
+              </CardTitle>
+              <TooltipOne
+                content={
+                  proxy.active
+                    ? 'ICMP Active'
+                    : 'ICMP disabled or computer unreachable'
+                }
+              >
+                <Badge variant='outline'>
+                  <Status status={proxy.active} />
+                </Badge>
+              </TooltipOne>
+            </div>
+            {!preferences.proxyContextMenu && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant='ghost'
+                    size='icon'
+                    className='size-8 shrink-0'
+                    aria-label={`Proxy actions for ${proxy.hostname}`}
+                  >
+                    <MoreHorizontal className='size-4' />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent>{actions}</DropdownMenuContent>
+              </DropdownMenu>
+            )}
+          </CardHeader>
+          <CardContent className='space-y-3 px-4'>
+            <div className='rounded-lg bg-muted/50 px-3 py-2.5'>
+              <p className='mb-1 text-xs text-muted-foreground'>
+                IP address
+              </p>
+              <div className='font-mono text-sm'>
+                {proxy.hostinfo.ip
+                  .split(/\s+/)
+                  .filter(Boolean)
+                  .map((ip) => (
+                    <span key={ip} className='block break-all'>
+                      {ip}
+                    </span>
+                  ))}
+              </div>
+            </div>
+            {proxy.hostinfo.ip.split(' ').length > 1 && (
+              <TooltipOne
+                content='There are multiple devices associated with this
                 hostname. We recommend you delete this entry and
                 generate a new one with the direct IP address.'
-          >
-            <Badge
-              variant='destructive'
-              className='max-w-full whitespace-normal'
-            >
-              <AlertCircle className='mr-2 h-4! w-5! stroke-3' />{' '}
-              Multiple devices detected
-            </Badge>
-          </TooltipOne>
-        )}
-
-        {!!proxy.tags?.length && (
-          <div className='flex flex-wrap gap-1.5'>
-            {normalizeProxyTags(proxy.tags).map((tag) => (
-              <Badge
-                key={tag}
-                variant='secondary'
-                className='max-w-full whitespace-normal break-words'
               >
-                {tag}
-              </Badge>
-            ))}
-          </div>
-        )}
-        <ProxyTagsEditor
-          tags={normalizeProxyTags(proxy.tags)}
-          availableTags={availableTags}
-          onChange={(tags) => onTagsChange(proxy, tags)}
-          open={openTags}
-          onOpenChange={setOpenTags}
-        />
+                <Badge
+                  variant='destructive'
+                  className='max-w-full whitespace-normal'
+                >
+                  <AlertCircle className='mr-2 h-4! w-5! stroke-3' />{' '}
+                  Multiple devices detected
+                </Badge>
+              </TooltipOne>
+            )}
 
-        <div className='flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t pt-3 text-xs text-muted-foreground'>
-          <span>Last checked</span>
-          <time dateTime={proxy.last_check}>
-            {dayjs(proxy.last_check).format('MM/DD/YYYY hh:mm:ss A')}
-          </time>
-        </div>
-      </CardContent>
-    </Card>
+            {!!proxy.tags?.length && (
+              <div className='flex flex-wrap gap-1.5'>
+                {normalizeProxyTags(proxy.tags).map((tag) => (
+                  <Badge
+                    key={tag}
+                    variant='secondary'
+                    className='max-w-full whitespace-normal break-words'
+                  >
+                    {tag}
+                  </Badge>
+                ))}
+              </div>
+            )}
+            <ProxyTagsEditor
+              tags={normalizeProxyTags(proxy.tags)}
+              availableTags={availableTags}
+              onChange={(tags) => onTagsChange(proxy, tags)}
+              open={openTags}
+              onOpenChange={setOpenTags}
+            />
+
+            <div className='flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t pt-3 text-xs text-muted-foreground'>
+              <span>Last checked</span>
+              <time dateTime={proxy.last_check}>
+                {dayjs(proxy.last_check).format(
+                  'MM/DD/YYYY hh:mm:ss A',
+                )}
+              </time>
+            </div>
+          </CardContent>
+        </Card>
+      </ContextMenuTrigger>
+      {preferences.proxyContextMenu && (
+        <ContextMenuContent>{actions}</ContextMenuContent>
+      )}
+    </ContextMenu>
   );
 }

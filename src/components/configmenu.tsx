@@ -14,6 +14,13 @@ import {
 } from 'lucide-react';
 import { valibotResolver } from 'mantine-form-valibot-resolver';
 import { useEffect, useId, useState } from 'react';
+import { Tabs } from 'radix-ui';
+import { SelectField, SelectOption } from '@/components/ui/select';
+import ShortcutSettings from '@/components/shortcutSettings';
+import {
+  useAppPreferences,
+  setAppPreferences,
+} from '@/lib/appPreferences';
 import { toast } from 'sonner';
 import * as v from 'valibot';
 import { Button } from '@/components/ui/button';
@@ -64,6 +71,8 @@ function SettingsDialog({
   deleteCredentials: () => void;
 }) {
   const { setTheme, theme } = useTheme();
+  const preferences = useAppPreferences();
+  const [category, setCategory] = useState('general');
   const { mode, setMode } = useDataSourceMode();
   const [deleteCredOnClose, setDeleteCredOnClose] = useState(false);
   const form = useForm({
@@ -112,183 +121,289 @@ function SettingsDialog({
           </Button>
         </DialogClose>
       </DialogHeader>
-      <ScrollArea
-        className='min-h-0 flex-1'
-        role='region'
-        aria-label='Settings preferences'
+      <Tabs.Root
+        value={category}
+        onValueChange={setCategory}
+        className='flex min-h-0 flex-1 flex-col'
       >
-        <div className='grid gap-5 p-4 sm:p-6 md:grid-cols-2'>
-          <div className='min-w-0 space-y-5'>
-            <section className='rounded-xl border bg-muted/20 p-4'>
-              <div className='mb-4 flex items-start gap-3'>
-                <span className='flex size-9 shrink-0 items-center justify-center rounded-lg bg-background text-muted-foreground'>
-                  {mode === 'mock' ? (
-                    <Database className='size-4' />
-                  ) : (
-                    <Wifi className='size-4' />
-                  )}
-                </span>
-                <div className='min-w-0 flex-1'>
-                  <div className='flex items-center justify-between gap-2'>
-                    <h2 className='text-sm font-semibold'>
-                      Data source
-                    </h2>
-                    <span className='rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground'>
-                      {mode === 'mock' ? 'Mock' : 'Live'}
+        <div className='shrink-0 border-b px-4 py-3 sm:px-6'>
+          <Tabs.List
+            aria-label='Settings categories'
+            className='hidden gap-1 rounded-lg bg-muted p-1 md:flex'
+          >
+            {[
+              { id: 'general', label: 'General' },
+              { id: 'credentials', label: 'Credentials' },
+              { id: 'policy', label: 'Local Policy' },
+              { id: 'updates', label: 'Updates' },
+              { id: 'shortcuts', label: 'Shortcuts' },
+            ].map((item) => (
+              <Tabs.Trigger
+                key={item.id}
+                value={item.id}
+                className='flex-1 rounded-md px-3 py-2 text-sm text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring data-[state=active]:bg-background data-[state=active]:font-medium data-[state=active]:text-foreground'
+              >
+                {item.label}
+              </Tabs.Trigger>
+            ))}
+          </Tabs.List>
+          <div className='md:hidden'>
+            <SelectField
+              aria-label='Settings category'
+              value={category}
+              onValueChange={setCategory}
+            >
+              {[
+                { id: 'general', label: 'General' },
+                { id: 'credentials', label: 'Credentials' },
+                { id: 'policy', label: 'Local Policy' },
+                { id: 'updates', label: 'Updates' },
+                { id: 'shortcuts', label: 'Shortcuts' },
+              ].map((item) => (
+                <SelectOption key={item.id} value={item.id}>
+                  {item.label}
+                </SelectOption>
+              ))}
+            </SelectField>
+          </div>
+        </div>
+        <ScrollArea
+          className='min-h-0 flex-1'
+          role='region'
+          aria-label='Settings preferences'
+        >
+          <div className='p-4 sm:p-6'>
+            <Tabs.Content
+              forceMount
+              value='general'
+              className='data-[state=inactive]:hidden space-y-4 outline-none'
+            >
+              <div className='grid items-start gap-4 md:grid-cols-2'>
+                <section className='rounded-xl border bg-muted/20 p-4'>
+                  <div className='mb-4 flex items-start gap-3'>
+                    <span className='flex size-9 shrink-0 items-center justify-center rounded-lg bg-background text-muted-foreground'>
+                      {mode === 'mock' ? (
+                        <Database className='size-4' />
+                      ) : (
+                        <Wifi className='size-4' />
+                      )}
                     </span>
+                    <div className='min-w-0 flex-1'>
+                      <div className='flex items-center justify-between gap-2'>
+                        <h2 className='text-sm font-semibold'>
+                          Data source
+                        </h2>
+                        <span className='rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground'>
+                          {mode === 'mock' ? 'Mock' : 'Live'}
+                        </span>
+                      </div>
+                      <p className='mt-1 text-xs leading-relaxed text-muted-foreground'>
+                        {mode === 'mock'
+                          ? 'Use the local sample server for offline development.'
+                          : 'Connect to the selected ProxySG over HTTPS.'}
+                      </p>
+                    </div>
                   </div>
-                  <p className='mt-1 text-xs leading-relaxed text-muted-foreground'>
-                    {mode === 'mock'
-                      ? 'Use the local sample server for offline development.'
-                      : 'Connect to the selected ProxySG over HTTPS.'}
-                  </p>
-                </div>
+                  <div className='flex items-center justify-between gap-3 rounded-lg bg-background px-3 py-2.5'>
+                    <div>
+                      <p className='text-sm font-medium'>
+                        Mocked data
+                      </p>
+                      <p className='text-xs text-muted-foreground'>
+                        {mode === 'mock'
+                          ? 'Use sample data for offline development.'
+                          : 'Live proxy data is used by default.'}
+                      </p>
+                    </div>
+                    <Switch
+                      id='data-source-mode'
+                      checked={mode === 'mock'}
+                      onCheckedChange={(checked) =>
+                        setMode(checked ? 'mock' : 'live')
+                      }
+                      aria-label='Mocked data'
+                    />
+                  </div>
+                  <div className='mt-3 flex items-start gap-2 text-[11px] leading-relaxed text-muted-foreground'>
+                    <ShieldCheck className='mt-0.5 size-3.5 shrink-0' />
+                    Live requests use the selected proxy and saved
+                    credentials. Rust accepts untrusted management
+                    certificates in the current environment.
+                  </div>
+                </section>
+                <section className='rounded-xl border p-4'>
+                  <div className='mb-3 flex items-center gap-3'>
+                    <span className='flex size-9 items-center justify-center rounded-lg bg-muted text-muted-foreground'>
+                      <Moon className='size-4' />
+                    </span>
+                    <div>
+                      <h2 className='text-sm font-semibold'>
+                        Appearance & privacy
+                      </h2>
+                      <p className='text-xs text-muted-foreground'>
+                        Personalize this device.
+                      </p>
+                    </div>
+                  </div>
+                  <div className='flex flex-col divide-y'>
+                    <div className='flex items-center justify-between gap-3 py-3'>
+                      <Label htmlFor='d_mode' className='text-sm'>
+                        Dark mode
+                      </Label>
+                      <Switch
+                        id='d_mode'
+                        checked={theme === 'dark'}
+                        onCheckedChange={(checked) => {
+                          setTheme(checked ? 'dark' : 'light');
+                          postLocalStorage('dark_mode', checked);
+                        }}
+                      />
+                    </div>
+                    <div className='flex items-center justify-between gap-3 py-3'>
+                      <div>
+                        <Label
+                          htmlFor='delete_close'
+                          className='text-sm'
+                        >
+                          Clear temporary credentials on exit
+                        </Label>
+                        <p className='mt-1 text-xs text-muted-foreground'>
+                          Remove one-time credentials when the app
+                          closes.
+                        </p>
+                      </div>
+                      <Switch
+                        id='delete_close'
+                        checked={deleteCredOnClose}
+                        onCheckedChange={(checked) => {
+                          setDeleteCredOnClose(checked);
+                          postLocalStorage(
+                            'delete_on_close',
+                            checked,
+                          );
+                        }}
+                      />
+                    </div>
+                  </div>
+                </section>
               </div>
-              <div className='flex items-center justify-between gap-3 rounded-lg bg-background px-3 py-2.5'>
+              <section className='flex items-center justify-between gap-4 rounded-xl border p-4'>
                 <div>
-                  <p className='text-sm font-medium'>Mocked data</p>
-                  <p className='text-xs text-muted-foreground'>
-                    {mode === 'mock'
-                      ? 'Use sample data for offline development.'
-                      : 'Live proxy data is used by default.'}
+                  <Label
+                    htmlFor='proxy-context-menu'
+                    className='text-sm font-semibold'
+                  >
+                    Proxy card context menu
+                  </Label>
+                  <p className='mt-1 text-xs text-muted-foreground'>
+                    Replace the three-dot menu with right-click
+                    actions on the proxy card. Keyboard: Shift + F10.
                   </p>
                 </div>
                 <Switch
-                  id='data-source-mode'
-                  checked={mode === 'mock'}
-                  onCheckedChange={(checked) =>
-                    setMode(checked ? 'mock' : 'live')
+                  id='proxy-context-menu'
+                  checked={preferences.proxyContextMenu}
+                  onCheckedChange={(value) =>
+                    setAppPreferences({ proxyContextMenu: value })
                   }
-                  aria-label='Mocked data'
                 />
-              </div>
-              <div className='mt-3 flex items-start gap-2 text-[11px] leading-relaxed text-muted-foreground'>
-                <ShieldCheck className='mt-0.5 size-3.5 shrink-0' />
-                Live requests use the selected proxy and saved
-                credentials. Rust accepts untrusted management
-                certificates in the current environment.
-              </div>
-            </section>
-            <section className='rounded-xl border p-4'>
-              <div className='mb-3 flex items-center gap-3'>
-                <span className='flex size-9 items-center justify-center rounded-lg bg-muted text-muted-foreground'>
-                  <Moon className='size-4' />
-                </span>
-                <div>
-                  <h2 className='text-sm font-semibold'>
-                    Appearance & privacy
-                  </h2>
-                  <p className='text-xs text-muted-foreground'>
-                    Personalize this device.
-                  </p>
-                </div>
-              </div>
-              <div className='flex flex-col divide-y'>
-                <div className='flex items-center justify-between gap-3 py-3'>
-                  <Label htmlFor='d_mode' className='text-sm'>
-                    Dark mode
-                  </Label>
-                  <Switch
-                    id='d_mode'
-                    checked={theme === 'dark'}
-                    onCheckedChange={(checked) => {
-                      setTheme(checked ? 'dark' : 'light');
-                      postLocalStorage('dark_mode', checked);
-                    }}
-                  />
-                </div>
-                <div className='flex items-center justify-between gap-3 py-3'>
+              </section>
+            </Tabs.Content>
+            <Tabs.Content
+              forceMount
+              value='credentials'
+              className='data-[state=inactive]:hidden mx-auto max-w-2xl outline-none'
+            >
+              <section className='rounded-xl border p-4'>
+                <div className='mb-4 flex items-start gap-3'>
+                  <span className='flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary'>
+                    <KeyRound className='size-4' />
+                  </span>
                   <div>
-                    <Label htmlFor='delete_close' className='text-sm'>
-                      Clear temporary credentials on exit
-                    </Label>
-                    <p className='mt-1 text-xs text-muted-foreground'>
-                      Remove one-time credentials when the app closes.
+                    <h2 className='text-sm font-semibold'>
+                      Proxy credentials
+                    </h2>
+                    <p className='mt-1 text-xs leading-relaxed text-muted-foreground'>
+                      {credentials
+                        ? 'Saved credentials are used for proxy requests.'
+                        : 'Save credentials to authenticate with your proxy.'}
                     </p>
                   </div>
-                  <Switch
-                    id='delete_close'
-                    checked={deleteCredOnClose}
-                    onCheckedChange={(checked) => {
-                      setDeleteCredOnClose(checked);
-                      postLocalStorage('delete_on_close', checked);
-                    }}
-                  />
                 </div>
-              </div>
-            </section>
-          </div>
-          <div className='min-w-0 space-y-5'>
-            <section className='rounded-xl border p-4'>
-              <div className='mb-4 flex items-start gap-3'>
-                <span className='flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary'>
-                  <KeyRound className='size-4' />
-                </span>
-                <div>
-                  <h2 className='text-sm font-semibold'>
-                    Proxy credentials
-                  </h2>
-                  <p className='mt-1 text-xs leading-relaxed text-muted-foreground'>
-                    {credentials
-                      ? 'Saved credentials are used for proxy requests.'
-                      : 'Save credentials to authenticate with your proxy.'}
+                <form
+                  className='flex flex-col gap-4'
+                  onSubmit={form.onSubmit((data) => {
+                    saveCredentials(data);
+                  })}
+                >
+                  <p className='text-xs text-muted-foreground'>
+                    {mode === 'mock'
+                      ? 'Mock credentials are saved in localStorage on this device. Local SSH backups use them.'
+                      : 'Saved credentials are protected by Windows Credential Manager. Mock HTTP requests never include them.'}
                   </p>
-                </div>
-              </div>
-              <form
-                className='flex flex-col gap-4'
-                onSubmit={form.onSubmit((data) => {
-                  saveCredentials(data);
-                })}
-              >
-                <p className='text-xs text-muted-foreground'>
-                  {mode === 'mock'
-                    ? 'Mock credentials are saved in localStorage on this device. Local SSH backups use them.'
-                    : 'Saved credentials are protected by Windows Credential Manager. Mock HTTP requests never include them.'}
-                </p>
 
-                <div className='flex flex-col gap-2'>
-                  <FormLabel htmlFor={usrId}>Username</FormLabel>
-                  <Input
-                    id={usrId}
-                    {...form.getInputProps('username')}
-                    placeholder='Username'
-                  />
-                  <FormLabel htmlFor={pswId}>Password</FormLabel>
-                  <Input
-                    id={pswId}
-                    {...form.getInputProps('password')}
-                    type='password'
-                    placeholder='Password'
-                  />
-                </div>
-                <div className='flex self-end gap-2'>
-                  {credentials && (
-                    <Button
-                      type='button'
-                      size='sm'
-                      variant='destructive'
-                      onClick={() => {
-                        deleteCredentials();
-                        form.reset();
-                      }}
-                    >
-                      Delete
+                  <div className='flex flex-col gap-2'>
+                    <FormLabel htmlFor={usrId}>Username</FormLabel>
+                    <Input
+                      id={usrId}
+                      {...form.getInputProps('username')}
+                      placeholder='Username'
+                    />
+                    <FormLabel htmlFor={pswId}>Password</FormLabel>
+                    <Input
+                      id={pswId}
+                      {...form.getInputProps('password')}
+                      type='password'
+                      placeholder='Password'
+                    />
+                  </div>
+                  <div className='flex self-end gap-2'>
+                    {credentials && (
+                      <Button
+                        type='button'
+                        size='sm'
+                        variant='destructive'
+                        onClick={() => {
+                          deleteCredentials();
+                          form.reset();
+                        }}
+                      >
+                        Delete
+                      </Button>
+                    )}
+
+                    <Button type='submit' size='sm'>
+                      {credentials && <Check className='size-4' />}
+                      {credentials ? 'Update' : 'Save'}
                     </Button>
-                  )}
-
-                  <Button type='submit' size='sm'>
-                    {credentials && <Check className='size-4' />}
-                    {credentials ? 'Update' : 'Save'}
-                  </Button>
-                </div>
-              </form>
-            </section>
-            <UpdateSettings key={mode} mode={mode} />
-            <PolicySettings key={`policy-${mode}`} mode={mode} />
+                  </div>
+                </form>
+              </section>
+            </Tabs.Content>
+            <Tabs.Content
+              forceMount
+              value='policy'
+              className='data-[state=inactive]:hidden outline-none'
+            >
+              <PolicySettings key={`policy-${mode}`} mode={mode} />
+            </Tabs.Content>
+            <Tabs.Content
+              forceMount
+              value='updates'
+              className='data-[state=inactive]:hidden mx-auto max-w-2xl outline-none'
+            >
+              <UpdateSettings key={mode} mode={mode} />
+            </Tabs.Content>
+            <Tabs.Content
+              forceMount
+              value='shortcuts'
+              className='data-[state=inactive]:hidden outline-none'
+            >
+              <ShortcutSettings active={category === 'shortcuts'} />
+            </Tabs.Content>
           </div>
-        </div>
-      </ScrollArea>
+        </ScrollArea>
+      </Tabs.Root>
       <DialogFooter className='shrink-0 flex-col border-t bg-muted/20 px-6 py-4 sm:items-center sm:justify-between'>
         <p className='text-xs text-muted-foreground'>
           Changes are saved per section.
