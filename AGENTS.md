@@ -1,5 +1,9 @@
 # Repository instructions
 
+## Execution preferences
+
+Implement requested changes directly. Do not run tests, builds or repeated validation unless explicitly requested; the user will test and provide feedback. Read only relevant code, keep tool calls and context concise, and clearly state what remains unverified.
+
 ## Commits and automated releases
 
 Use Conventional Commits for all new commits and for PR titles that will be squash-merged:
@@ -20,7 +24,7 @@ Release Please manages one app version, tags `vX.Y.Z` and `CHANGELOG.md` on `mai
 
 `.github/workflows/release-please.yml` opens/updates the release PR. Merging that PR publishes the tag/release and explicitly calls the reusable Windows build. Do not rely on `release` or tag events created by `GITHUB_TOKEN` to trigger a separate workflow. The build checks out the exact release tag and uploads the EXE as a release asset. Manual build execution without a tag remains artifact-only; a tag can be supplied to retry an existing release's build/upload.
 
-Validate release/workflow edits using actionlint and the actual Release Please strategy/updaters, including patch, feature, breaking-change and version synchronization checks. See [release instructions](docs/releases.md) for activation requirements and recovery steps. Commit or push only when requested by the user.
+When validation is explicitly requested, validate release/workflow edits using actionlint and the actual Release Please strategy/updaters, including patch, feature, breaking-change and version synchronization checks. See [release instructions](docs/releases.md) for activation requirements and recovery steps. Commit or push only when requested by the user.
 
 ## Application updates and storage
 
