@@ -5,7 +5,7 @@ import type { Metadata } from 'next';
 import Navbar from '@/components/navbar';
 import CredentialProvider from '@/components/providers/credentialProvider';
 import ThemeProvider from '@/components/providers/themeprovider';
-import { ScrollArea } from '@/components/ui/scroll-area';
+import RouteScrollArea from '@/components/routeScrollArea';
 import { Toaster } from '@/components/ui/sonner';
 import WindowTitlebar from '@/components/window-titlebar';
 import DayjsProvider from '@/providers/dayjsExtension';
@@ -39,11 +39,11 @@ export default function RootLayout({
                   <DayjsProvider>
                     <div className='flex min-h-0 min-w-0 flex-1 flex-col'>
                       <Navbar />
-                      <ScrollArea className='min-h-0 w-full flex-1'>
+                      <RouteScrollArea>
                         <TooltipProvider delayDuration={10}>
                           {children}
                         </TooltipProvider>
-                      </ScrollArea>
+                      </RouteScrollArea>
                     </div>
                   </DayjsProvider>
                 </CredentialProvider>
