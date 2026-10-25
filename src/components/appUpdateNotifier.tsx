@@ -101,6 +101,10 @@ export default function AppUpdateNotifier() {
             <Button
               variant='outline'
               className='h-auto w-full justify-start whitespace-normal p-4 text-left'
+              style={{
+                backgroundColor: 'var(--popover)',
+                color: 'var(--popover-foreground)',
+              }}
               onClick={() => {
                 toast.dismiss(toastId);
                 setOpen(true);
