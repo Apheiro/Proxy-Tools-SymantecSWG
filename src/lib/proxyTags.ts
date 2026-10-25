@@ -48,7 +48,7 @@ export function groupProxies(
     (proxy) => !normalizeProxyTags(proxy.tags).length,
   );
   if (untagged.length)
-    groups.push({
+    groups.unshift({
       key: 'untagged',
       label: 'Untagged',
       proxies: untagged,
