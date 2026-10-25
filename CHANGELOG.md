@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.0](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/compare/v0.3.1...v0.4.0) (2026-10-16)
+
+
+### Features
+
+* **policy:** add visual CPL editing and guarded SSH distribution ([65e9a3b](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/commit/65e9a3b58b4bbc9d0a2aeb6715d3ef3d56f686ac))
+* **traffic:** export themed PDF reports with concentrated peak analysis ([9da01e6](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/commit/9da01e6b5b0a01bcf330d21bf50d54402300398c))
+
+
+### Bug Fixes
+
+* **proxies:** preserve saved hostnames when reverse DNS fails ([f5077af](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/commit/f5077af1ff6daf88b82a66154738dae9970a0be9))
+* **ssh:** preserve multiline input and stream large policy submissions ([a1dbb69](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/commit/a1dbb69e58828dc1d87367133079cea0f7b0c5e5))
+
 ## [0.3.1](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/compare/v0.3.0...v0.3.1) (2026-10-15)
 
 
