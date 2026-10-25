@@ -56,7 +56,7 @@ export const documentationTopics: Record<DocumentationSlug, Topic> = {
           ],
           [
             'Management console',
-            'Open a separate WebView window. Windows WebView2 responds to HTTP Basic authentication challenges with the application credentials; credentials are not embedded in the URL. Windows WebView2 automatically accepts certificate errors for the initial management HTTPS origin. Other origins retain normal certificate validation; this is separate from Rust HTTP clients.',
+            'Open a retained native child webview in the shared modal. Minimize, Escape or the overlay keeps it available in the floating dot dock. Ctrl+Left/Right switches groups and Ctrl+Up/Down switches same-origin popup layers. Windows WebView2 responds to HTTP Basic authentication challenges with the application credentials; credentials are not embedded in the URL. Windows WebView2 automatically accepts certificate errors for the initial management HTTPS origin. Other origins retain normal certificate validation; this is separate from Rust HTTP clients.',
           ],
         ],
       },

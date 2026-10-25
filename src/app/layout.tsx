@@ -10,6 +10,7 @@ import { Toaster } from '@/components/ui/sonner';
 import WindowTitlebar from '@/components/window-titlebar';
 import DayjsProvider from '@/providers/dayjsExtension';
 import AppUpdateNotifier from '@/components/appUpdateNotifier';
+import EmbeddedBrowserProvider from '@/components/embedded-browser/provider';
 // import ProxyGliobalDataProvider from '@/providers/proxyGlobalData';
 
 export const metadata: Metadata = {
@@ -30,23 +31,27 @@ export default function RootLayout({
           enableSystem
           disableTransitionOnChange
         >
-          <div className='flex h-full min-w-0 flex-col'>
+          <div className='flex h-full min-h-0 flex-col'>
             <WindowTitlebar />
-            <CredentialProvider>
-              <DayjsProvider>
-                <div className='flex min-h-0 min-w-0 flex-1 flex-col'>
-                  <Navbar />
-                  <ScrollArea className='min-h-0 w-full flex-1'>
-                    <TooltipProvider delayDuration={10}>
-                      {children}
-                    </TooltipProvider>
-                  </ScrollArea>
-                </div>
-              </DayjsProvider>
-            </CredentialProvider>
+            <EmbeddedBrowserProvider>
+              <div className='flex h-full min-w-0 flex-col'>
+                <CredentialProvider>
+                  <DayjsProvider>
+                    <div className='flex min-h-0 min-w-0 flex-1 flex-col'>
+                      <Navbar />
+                      <ScrollArea className='min-h-0 w-full flex-1'>
+                        <TooltipProvider delayDuration={10}>
+                          {children}
+                        </TooltipProvider>
+                      </ScrollArea>
+                    </div>
+                  </DayjsProvider>
+                </CredentialProvider>
+              </div>
+              <Toaster position='top-center' />
+              <AppUpdateNotifier />
+            </EmbeddedBrowserProvider>
           </div>
-          <Toaster position='top-center' />
-          <AppUpdateNotifier />
         </ThemeProvider>
       </body>
     </html>

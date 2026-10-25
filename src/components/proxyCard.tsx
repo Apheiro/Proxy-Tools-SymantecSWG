@@ -50,6 +50,7 @@ import { getLocalStorage } from '@/lib/utilsClient';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import ProxyTagsEditor from '@/components/proxyTagsEditor';
+import { useEmbeddedBrowser } from '@/components/embedded-browser/provider';
 import { normalizeProxyTags } from '@/lib/proxyTags';
 
 const credentialSchema = v.object({
@@ -294,7 +295,19 @@ export default function ProxyCard({
   const reverseHostnameUnavailable =
     isIpLiteral(proxyAddress) && !hasHostname;
 
+  const embeddedBrowser = useEmbeddedBrowser();
   const openProxy = (url: string, credentials?: Credentials) => {
+    const vpm = url.includes('mc_vpm.html');
+    if (mode === 'mock') {
+      void embeddedBrowser.open({
+        url: vpm
+          ? 'https://developer.mozilla.org/en-US/docs/Web/API/Window/open'
+          : 'https://httpbin.org/forms/post',
+        title: vpm ? 'Demo · Web navigation' : 'Demo · Form state',
+      });
+      setPendingProxyUrl(null);
+      return;
+    }
     const auth =
       credentials ||
       getLocalStorage<Credentials>('credentials') ||
@@ -305,10 +318,10 @@ export default function ProxyCard({
       return;
     }
 
-    invoke('open_proxy', {
+    void embeddedBrowser.open({
       url,
-      username: auth.username,
-      password: auth.password,
+      title: `${vpm ? 'VPM' : 'Admin console'} · ${proxy.hostname}`,
+      authentication: { ...auth, acceptInvalidCertificates: true },
     });
     setPendingProxyUrl(null);
   };

@@ -84,6 +84,7 @@ pnpm exec playwright test
 - [Backup Manager](docs/backup-manager.md)
 - [SSH console](docs/ssh-console.md)
 - [Local Policy Manager](docs/local-policy-manager.md)
+- [Embedded page manager](docs/embedded-browser.md)
 - [Connectivity and DNS resolution](docs/native-proxy-networking.md)
 - [Downloading updates](docs/app-updates.md)
 - [Versioning and releases](docs/releases.md)

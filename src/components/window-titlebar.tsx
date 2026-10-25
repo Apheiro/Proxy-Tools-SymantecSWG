@@ -27,8 +27,14 @@ export default function WindowTitlebar({
     let unlisten: UnlistenFn | undefined;
     let unlistenClose: UnlistenFn | undefined;
     let unlistenPolicy: UnlistenFn | undefined;
-    void listen<string>('policy:close-blocked', ({ payload }) => toast.warning(payload))
-      .then(cleanup => { if (disposed) cleanup(); else unlistenPolicy = cleanup; }).catch(console.error);
+    void listen<string>('policy:close-blocked', ({ payload }) =>
+      toast.warning(payload),
+    )
+      .then((cleanup) => {
+        if (disposed) cleanup();
+        else unlistenPolicy = cleanup;
+      })
+      .catch(console.error);
     void listen<string>('backup:close-blocked', ({ payload }) =>
       toast.warning(payload),
     )
@@ -78,7 +84,7 @@ export default function WindowTitlebar({
     <header
       data-slot='window-titlebar'
       className={cn(
-        'bg-background text-foreground flex h-9 shrink-0 select-none items-center border-b',
+        'relative z-[100] pointer-events-auto bg-background text-foreground flex h-9 shrink-0 select-none items-center border-b',
         className,
       )}
     >

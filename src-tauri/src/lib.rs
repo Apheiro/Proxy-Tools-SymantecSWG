@@ -107,6 +107,13 @@ use ssh_console::{ConsoleState, get_ssh_session, continue_ssh_console, close_oth
 use backup_manager::{start_backup, list_backups, read_backup, delete_backup, open_backup_folder, get_backup_status, BackupState};
 use credentials::{read_management_credentials, save_management_credentials, delete_management_credentials};
 use proxy_transport::clear_management_sessions;
+#[cfg(target_os = "linux")]
+mod embedded_linux;
+mod embedded_auth;
+mod embedded_shortcuts;
+use embedded_shortcuts::{ShortcutState, embedded_set_shortcuts};
+mod embedded_browser;
+use embedded_browser::{EmbeddedState, embedded_open, embedded_list, embedded_present, embedded_hide, embedded_close, embedded_focus};
 mod traffic_pdf;
 use traffic_pdf::{save_traffic_pdf, open_traffic_pdf};
 mod traffic_analysis;
@@ -126,7 +133,7 @@ use proxy_network::TraceLog;
 use crate::utils::{append_json_for_blocks, cap_str, get_regex};
 use tokio_util::sync::CancellationToken;
 
-use tauri::{ WebviewUrl, WebviewWindowBuilder,Manager, AppHandle, Emitter,  State};
+use tauri::{Manager, AppHandle, Emitter, State};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -174,148 +181,6 @@ async fn fetch_pac_source(url: String) -> Result<PacSourceResponse, String> {
     }
     let content = String::from_utf8(bytes).map_err(|_| "The PAC source is not valid UTF-8 text.".to_string())?;
     Ok(PacSourceResponse { requested_url: parsed.to_string(), final_url, status: status.as_u16(), etag, last_modified, content })
-}
-
-#[tauri::command]
-async fn open_proxy(
-  app: tauri::AppHandle,
-  url: String,
-  username: String,
-  password: String,
-) -> tauri::Result<()> {
-  let url: tauri::Url = url.parse().map_err(tauri::Error::InvalidUrl)?;
-  if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some() {
-      return Err(tauri::Error::Anyhow(anyhow::anyhow!("Management windows require HTTPS without embedded credentials.")));
-  }
-  let window = WebviewWindowBuilder::new(
-      &app,
-      "tab-viewer".to_string(),
-      WebviewUrl::External("about:blank".parse().unwrap())
-  )
-  .title("Nueva pestaña")
-  .inner_size(1200.0, 800.0)
-  .resizable(true)
-  .build()?;
-
-  #[cfg(not(target_os = "windows"))]
-  {
-    window.navigate(url)?;
-    return Ok(());
-  }
-
-  #[cfg(target_os = "windows")]
-  window.with_webview(move |webview| {
-    unsafe {
-      use webview2_com::{
-        BasicAuthenticationRequestedEventHandler,
-        ServerCertificateErrorDetectedEventHandler,
-        Microsoft::Web::WebView2::Win32::{
-          ICoreWebView2_10,
-          ICoreWebView2_14,
-          COREWEBVIEW2_SERVER_CERTIFICATE_ERROR_ACTION_ALWAYS_ALLOW,
-        },
-      };
-      use windows::core::{Interface, PCWSTR};
-
-      let controller = webview.controller();
-      let core_webview = match controller.CoreWebView2() {
-        Ok(core_webview) => core_webview,
-        Err(error) => {
-          eprintln!("Failed to get WebView2 instance: {error}");
-          return;
-        }
-      };
-      let webview_with_auth = match core_webview.cast::<ICoreWebView2_10>() {
-        Ok(webview) => webview,
-        Err(error) => {
-          eprintln!("WebView2 BasicAuthenticationRequested is unavailable: {error}");
-          return;
-        }
-      };
-
-      let webview_with_certificates = match core_webview.cast::<ICoreWebView2_14>() {
-        Ok(webview) => webview,
-        Err(error) => {
-          eprintln!("WebView2 ServerCertificateErrorDetected is unavailable: {error}");
-          return;
-        }
-      };
-      let certificate_origin = url.origin();
-      let certificate_handler = ServerCertificateErrorDetectedEventHandler::create(Box::new(
-        move |_sender, args| {
-          if let Some(args) = args {
-            let mut uri = windows::core::PWSTR::null();
-            args.RequestUri(&mut uri)?;
-            let uri = webview2_com::take_pwstr(uri);
-            // Internal appliances commonly use untrusted certificates. Limit the
-            // exception to this management origin; keep normal checks elsewhere.
-            if tauri::Url::parse(&uri).ok().is_some_and(|requested| requested.origin() == certificate_origin) {
-              args.SetAction(COREWEBVIEW2_SERVER_CERTIFICATE_ERROR_ACTION_ALWAYS_ALLOW)?;
-            }
-          }
-          Ok(())
-        },
-      ));
-      let mut certificate_event_token = 0;
-      if let Err(error) = webview_with_certificates.add_ServerCertificateErrorDetected(
-        &certificate_handler,
-        &mut certificate_event_token,
-      ) {
-        eprintln!("Failed to register WebView2 certificate handler: {error}");
-        return;
-      }
-
-      let allowed_origin = url.origin();
-      let auth_handler = BasicAuthenticationRequestedEventHandler::create(Box::new(
-        move |_sender, args| {
-          if let Some(args) = args {
-            let mut uri = windows::core::PWSTR::null();
-            args.Uri(&mut uri)?;
-            let uri = webview2_com::take_pwstr(uri);
-            if tauri::Url::parse(&uri).ok().is_none_or(|requested| requested.origin() != allowed_origin) {
-                args.SetCancel(true)?;
-                return Ok(());
-            }
-            let response = args.Response()?;
-            let username_wide: Vec<u16> = username
-              .encode_utf16()
-              .chain(std::iter::once(0))
-              .collect();
-            let password_wide: Vec<u16> = password
-              .encode_utf16()
-              .chain(std::iter::once(0))
-              .collect();
-            response.SetUserName(PCWSTR::from_raw(username_wide.as_ptr()))?;
-            response.SetPassword(PCWSTR::from_raw(password_wide.as_ptr()))?;
-          }
-          Ok(())
-        },
-      ));
-
-      let mut event_token = 0;
-      if let Err(error) = webview_with_auth.add_BasicAuthenticationRequested(
-        &auth_handler,
-        &mut event_token,
-      ) {
-        eprintln!("Failed to register WebView2 authentication handler: {error}");
-        let _ = webview_with_certificates.remove_ServerCertificateErrorDetected(certificate_event_token);
-        return;
-      }
-
-      let url_wide: Vec<u16> = url
-        .as_str()
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
-      if let Err(error) = core_webview.Navigate(PCWSTR::from_raw(url_wide.as_ptr())) {
-        eprintln!("Failed to navigate proxy window: {error}");
-        let _ = webview_with_auth.remove_BasicAuthenticationRequested(event_token);
-        let _ = webview_with_certificates.remove_ServerCertificateErrorDetected(certificate_event_token);
-      }
-    }
-  })?;
-
-  Ok(())
 }
 
 #[tauri::command]
@@ -790,6 +655,8 @@ pub fn run() {
     .manage(LogWorkerState::default())
     .manage(BackupState::default())
     .manage(ConsoleState::default())
+    .manage(EmbeddedState::default())
+    .manage(ShortcutState::default())
     .manage(PolicyState::default())
     .on_window_event(|window, event| {
         backup_manager::on_window_event(window, event);
@@ -803,7 +670,7 @@ pub fn run() {
     .manage(TrafficStreamState::default())
     .manage(AccessLogParseState::default())
     .plugin(tauri_plugin_opener::init())
-    .invoke_handler(tauri::generate_handler![save_traffic_pdf, open_traffic_pdf, get_policy_settings, save_policy_settings, inspect_policies, read_policy_snapshot, read_central_policy, save_central_policy, compare_policy_text, get_policy_progress, distribute_policy, get_ssh_session, continue_ssh_console, close_other_ssh_profiles, connect_ssh_console, list_ssh_sessions, send_ssh_input, disconnect_ssh_console, interrupt_ssh_console, read_ssh_output, remove_ssh_session, check_app_update, download_app_update, open_update_folder, has_update_token, save_update_token, delete_update_token, start_backup, list_backups, read_backup, delete_backup, open_backup_folder, get_backup_status, read_management_credentials, save_management_credentials, delete_management_credentials, clear_management_sessions, getproxystatus, start_logs, stop_logs, open_proxy, get_html_data, fetch_pac_source, get_app_cache_paths, save_traffic_analysis, load_traffic_analysis, list_traffic_analyses, parse_access_log, get_mock_access_log, get_traffic_access_logs, start_traffic_stream, stop_traffic_stream, start_access_log_parse, append_access_log_parse_chunk, abort_access_log_parse, get_traffic_processing_config, query_traffic_capture])
+    .invoke_handler(tauri::generate_handler![embedded_set_shortcuts, save_traffic_pdf, open_traffic_pdf, get_policy_settings, save_policy_settings, inspect_policies, read_policy_snapshot, read_central_policy, save_central_policy, compare_policy_text, get_policy_progress, distribute_policy, get_ssh_session, continue_ssh_console, close_other_ssh_profiles, connect_ssh_console, list_ssh_sessions, send_ssh_input, disconnect_ssh_console, interrupt_ssh_console, read_ssh_output, remove_ssh_session, check_app_update, download_app_update, open_update_folder, has_update_token, save_update_token, delete_update_token, start_backup, list_backups, read_backup, delete_backup, open_backup_folder, get_backup_status, read_management_credentials, save_management_credentials, delete_management_credentials, clear_management_sessions, getproxystatus, start_logs, stop_logs, embedded_open, embedded_list, embedded_present, embedded_hide, embedded_close, embedded_focus, get_html_data, fetch_pac_source, get_app_cache_paths, save_traffic_analysis, load_traffic_analysis, list_traffic_analyses, parse_access_log, get_mock_access_log, get_traffic_access_logs, start_traffic_stream, stop_traffic_stream, start_access_log_parse, append_access_log_parse_chunk, abort_access_log_parse, get_traffic_processing_config, query_traffic_capture])
     .run(context)
     .expect("error while running tauri application");
 }
