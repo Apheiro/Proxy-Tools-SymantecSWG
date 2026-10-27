@@ -439,7 +439,8 @@ async fn stop_logs(state: State<'_, LogWorkerState>) -> Result<(), String> {
 
 #[derive(Serialize)]
 struct HtmlData {
-    filesLink: Vec<FileLink>,
+    #[serde(rename = "filesLink")]
+    files_link: Vec<FileLink>,
     traces: Vec<TraceItem>,
 }
 
@@ -641,7 +642,7 @@ async fn get_html_data(
     }
 
     Ok(HtmlData {
-        filesLink: files,
+        files_link: files,
         traces,
     })
 }
