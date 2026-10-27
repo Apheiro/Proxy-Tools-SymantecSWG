@@ -2,6 +2,7 @@
 /** biome-ignore-all lint/style/useNamingConvention: <> */
 /** biome-ignore-all lint/a11y/noStaticElementInteractions: <> */
 'use client';
+import { Tabs } from 'radix-ui';
 import { invoke } from '@tauri-apps/api/core';
 import {
   Activity,
@@ -18,12 +19,7 @@ import { toast } from 'sonner';
 import PageHeader from '@/components/pageHeader';
 import BackgroundRefresh from '@/components/backgroundRefresh';
 import { Badge } from '@/components/ui/badge';
-import {
-  Card,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
+import { Card } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import getCredentials from '@/lib/getCredentials';
 import { useScrapedData } from '@/lib/scrapingCache';
@@ -32,7 +28,7 @@ import { cva } from '@/lib/cva';
 import { refreshStyles } from '@/lib/uiVariants';
 
 const policyFileStyles = cva({
-  base: 'flex min-w-0 items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors hover:bg-accent',
+  base: 'flex min-w-0 items-center gap-2 rounded-md px-2 py-2 text-left text-sm outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring',
   variants: {
     selected: {
       true: 'bg-accent font-medium text-accent-foreground',
@@ -76,12 +72,34 @@ function linesOnText(text: string) {
   return resultado;
 }
 
+type DiagnosticsView = {
+  tab: 'traces' | 'policies';
+  file: string | null;
+};
+// Keep navigation context for this session, separately for each proxy/profile.
+const diagnosticsViews = new Map<string, DiagnosticsView>();
+
 function PageBase() {
   const searchParams = useSearchParams();
-  const [policySelection, setPolicyFileSelected] =
-    useState<FileLink | null>(null);
   const { mode, ready: modeReady } = useDataSourceMode();
   const proxy = searchParams.get('proxy') || '';
+  const viewKey = JSON.stringify([mode, proxy]);
+  const [viewState, setViewState] = useState<{
+    key: string;
+    view: DiagnosticsView;
+  } | null>(null);
+  const view =
+    viewState?.key === viewKey
+      ? viewState.view
+      : (diagnosticsViews.get(viewKey) ?? {
+          tab: 'traces' as const,
+          file: null,
+        });
+  const updateView = (patch: Partial<DiagnosticsView>) => {
+    const next = { ...view, ...patch };
+    diagnosticsViews.set(viewKey, next);
+    setViewState({ key: viewKey, view: next });
+  };
   const load = useCallback(() => {
     const credentials = getCredentials();
     if (!proxy) return Promise.reject('No proxy selected.');
@@ -105,22 +123,12 @@ function PageBase() {
   );
   const loadStatus = htmlData ? 'loaded' : busy ? 'loading' : 'error';
   const policyFileSelected =
-    htmlData?.filesLink.find(
-      (file) => file.name === policySelection?.name,
-    ) ?? null;
+    htmlData?.filesLink.find((file) => file.name === view.file) ??
+    null;
   useEffect(() => {
     if (error)
       toast.error(`Could not update policy and trace data: ${error}`);
   }, [error]);
-  useEffect(() => {
-    setPolicyFileSelected((previous) =>
-      previous
-        ? (htmlData?.filesLink.find(
-            (file) => file.name === previous.name,
-          ) ?? null)
-        : null,
-    );
-  }, [htmlData]);
 
   return (
     <main
@@ -128,7 +136,7 @@ function PageBase() {
       className={refreshStyles({
         refreshing: busy && !!htmlData,
         className:
-          'mx-auto flex min-h-dvh w-full max-w-7xl flex-col gap-8 px-4 py-6 md:px-6',
+          'mx-auto flex w-full max-w-7xl flex-col gap-5 px-4 py-5 md:px-6',
       })}
     >
       <BackgroundRefresh
@@ -158,222 +166,248 @@ function PageBase() {
         }
       />
 
-      <Link
-        href={{
-          pathname: '/Diagnostics/TrafficAnalysis',
-          query: { proxy },
-        }}
-        className='group rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+      <nav
+        aria-label='Diagnostic tools'
+        className='grid gap-3 sm:grid-cols-2'
       >
-        <Card className='gap-3 border-primary/20 bg-primary/[0.03] p-4 transition-colors group-hover:border-primary/50 group-hover:bg-primary/[0.06]'>
-          <div className='flex items-center justify-between gap-4'>
-            <div className='flex items-center gap-3'>
-              <span className='flex size-11 items-center justify-center rounded-xl bg-primary/10 text-primary'>
-                <Activity className='size-5' />
+        {[
+          {
+            path: 'TrafficAnalysis',
+            title: 'Traffic Analysis',
+            description:
+              'Access logs, bandwidth and traffic insights.',
+            icon: Activity,
+          },
+          {
+            path: 'BackupManager',
+            title: 'Backup Manager',
+            description: 'Create and browse configuration backups.',
+            icon: Archive,
+          },
+        ].map(({ path, title, description, icon: Icon }) => (
+          <Link
+            key={path}
+            href={{
+              pathname: `/Diagnostics/${path}`,
+              query: { proxy },
+            }}
+            className='group rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+          >
+            <Card className='h-full flex-row items-center gap-3 p-3 transition-colors group-hover:border-primary/40 group-hover:bg-accent/40'>
+              <span className='flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary'>
+                <Icon className='size-4' />
               </span>
-              <div>
-                <h2 className='font-semibold'>Traffic Analysis</h2>
-                <p className='mt-1 text-sm text-muted-foreground'>
-                  Explore access log traffic, bandwidth, top talkers,
-                  and detected issues.
+              <div className='min-w-0 flex-1'>
+                <h2 className='text-sm font-semibold'>{title}</h2>
+                <p className='mt-0.5 text-xs text-muted-foreground'>
+                  {description}
                 </p>
               </div>
-            </div>
-            <span className='flex items-center gap-2 text-sm font-medium text-primary'>
-              Open analysis{' '}
-              <ArrowUpRight className='size-4 transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5' />
-            </span>
-          </div>
-        </Card>
-      </Link>
+              <ArrowUpRight className='size-4 shrink-0 text-muted-foreground transition-colors group-hover:text-foreground' />
+            </Card>
+          </Link>
+        ))}
+      </nav>
 
-      <Link
-        href={{
-          pathname: '/Diagnostics/BackupManager',
-          query: { proxy },
+      <Tabs.Root
+        value={view.tab}
+        onValueChange={(tab) => {
+          if (tab === 'traces' || tab === 'policies')
+            updateView({ tab });
         }}
-        className='group rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+        className='min-w-0'
       >
-        <Card className='gap-3 p-4 transition-colors group-hover:border-primary/50 group-hover:bg-accent/40'>
-          <div className='flex items-center justify-between gap-4'>
-            <div className='flex items-center gap-3'>
-              <Archive className='size-5' />
-              <div>
-                <h2 className='font-semibold'>Backup Manager</h2>
-                <p className='mt-1 text-sm text-muted-foreground'>
-                  Create and browse appliance configuration backups
-                  over SSH.
-                </p>
-              </div>
-            </div>
-            <ArrowUpRight className='size-4' />
-          </div>
-        </Card>
-      </Link>
-
-      <section
-        className='flex flex-col gap-4'
-        aria-labelledby='traces-title'
-      >
-        <div className='flex items-end justify-between gap-3'>
-          <div>
-            <h2 id='traces-title' className='text-xl font-semibold'>
-              Available traces
-            </h2>
-            <p className='mt-1 text-sm text-muted-foreground'>
-              Select a trace to inspect its transactions.
-            </p>
-          </div>
-          {loadStatus === 'loaded' && (
-            <Badge variant='outline'>
-              {htmlData?.traces.length ?? 0}
-            </Badge>
-          )}
-        </div>
-
-        {loadStatus === 'loading' ? (
-          <div className='rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground'>
-            Loading proxy data…
-          </div>
-        ) : loadStatus === 'error' ? (
-          <div className='rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground'>
-            Could not load proxy data. Check the connection or reopen
-            this page.
-          </div>
-        ) : htmlData?.traces.length ? (
-          <div className='grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3'>
-            {htmlData.traces.map((trace) => (
-              <Link
-                key={trace.trace}
-                href={{
-                  pathname: '/Diagnostics/Trace',
-                  query: {
-                    traceUrl: trace.url,
-                    proxy,
-                  },
-                }}
-                className='group rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
-              >
-                <Card className='h-full gap-3 p-4 transition-colors group-hover:border-primary/40 group-hover:bg-accent/40'>
-                  <div className='flex items-center gap-3'>
-                    <span className='flex size-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary'>
-                      <Activity className='size-5' />
-                    </span>
-                    <div className='min-w-0'>
-                      <h3 className='truncate font-semibold'>
-                        {trace.trace}
-                      </h3>
-                      <p className='text-xs text-muted-foreground'>
-                        Open transaction trace
-                      </p>
-                    </div>
-                  </div>
-                </Card>
-              </Link>
-            ))}
-          </div>
-        ) : (
-          <div className='rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground'>
-            No traces are available for this proxy.
-          </div>
-        )}
-      </section>
-
-      <section
-        className='flex flex-col gap-4'
-        aria-labelledby='policies-title'
-      >
-        <div>
-          <h2 id='policies-title' className='text-xl font-semibold'>
-            Policy files
-          </h2>
-          <p className='mt-1 text-sm text-muted-foreground'>
-            Choose a file to inspect its contents.
-          </p>
-        </div>
-
-        <Card className='gap-0 overflow-hidden'>
-          <CardHeader className='border-b px-4 py-4 md:px-5'>
-            <CardTitle className='flex items-center gap-2 text-base'>
-              <FileText className='size-4 text-muted-foreground' />
-              Policy explorer
-            </CardTitle>
-            <CardDescription>
-              {policyFileSelected?.name ??
-                'Select a policy file from the list'}
-            </CardDescription>
-          </CardHeader>
-
-          <div className='grid min-h-[360px] grid-cols-1 md:grid-cols-[240px_minmax(0,1fr)]'>
-            <nav
-              aria-label='Policy files'
-              className='border-b p-3 md:border-b-0 md:border-r'
+        <Tabs.List
+          aria-label='Proxy diagnostic data'
+          className='mb-3 flex gap-1 rounded-lg border bg-muted/40 p-1'
+        >
+          {[
+            {
+              value: 'traces',
+              label: 'Policy Traces',
+              count: htmlData?.traces.length ?? 0,
+              icon: Activity,
+            },
+            {
+              value: 'policies',
+              label: 'Policy Files',
+              count: htmlData?.filesLink.length ?? 0,
+              icon: FileText,
+            },
+          ].map(({ value, label, count, icon: Icon }) => (
+            <Tabs.Trigger
+              key={value}
+              value={value}
+              className='flex min-w-0 items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[state=active]:bg-background data-[state=active]:text-foreground'
             >
-              <p className='mb-2 px-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground'>
-                Files
+              <Icon className='size-4 shrink-0' />
+              {label}
+              <Badge
+                variant='secondary'
+                className='px-1.5 py-0 text-[10px]'
+              >
+                {count}
+              </Badge>
+            </Tabs.Trigger>
+          ))}
+        </Tabs.List>
+
+        <Tabs.Content
+          value='traces'
+          className='outline-none focus-visible:ring-2 focus-visible:ring-ring'
+        >
+          <Card className='gap-0 overflow-hidden py-0'>
+            <div className='border-b px-4 py-3 text-xs text-muted-foreground'>
+              Select a trace to inspect its transactions.
+            </div>
+            {loadStatus === 'loading' ? (
+              <p
+                role='status'
+                className='p-8 text-center text-sm text-muted-foreground'
+              >
+                Loading proxy data…
               </p>
-              {loadStatus === 'loading' ? (
-                <p className='px-2 py-3 text-sm text-muted-foreground'>
-                  Loading files…
-                </p>
-              ) : htmlData?.filesLink.length ? (
-                <div className='flex flex-col gap-1'>
-                  {htmlData.filesLink.map((file) => (
-                    <button
-                      key={file.name}
-                      type='button'
-                      aria-pressed={
-                        policyFileSelected?.name === file.name
-                      }
-                      onClick={() => setPolicyFileSelected(file)}
-                      className={policyFileStyles({
-                        selected:
-                          policyFileSelected?.name === file.name,
-                      })}
+            ) : loadStatus === 'error' ? (
+              <p
+                role='alert'
+                className='p-8 text-center text-sm text-muted-foreground'
+              >
+                Could not load proxy data. Check the connection or
+                reopen this page.
+              </p>
+            ) : htmlData?.traces.length ? (
+              <ScrollArea className='h-[clamp(240px,55dvh,640px)]'>
+                <div className='divide-y'>
+                  {htmlData.traces.map((trace) => (
+                    <Link
+                      key={trace.url}
+                      href={{
+                        pathname: '/Diagnostics/Trace',
+                        query: { traceUrl: trace.url, proxy },
+                      }}
+                      className='group flex min-w-0 items-center gap-3 px-4 py-3 transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring'
                     >
-                      <FileText className='size-4 shrink-0' />
-                      <span className='truncate'>{file.name}</span>
-                    </button>
+                      <Activity className='size-4 shrink-0 text-muted-foreground' />
+                      <span
+                        className='min-w-0 flex-1 truncate text-sm font-medium'
+                        title={trace.trace}
+                      >
+                        {trace.trace}
+                      </span>
+                      <span className='hidden text-xs text-muted-foreground sm:inline'>
+                        View transactions
+                      </span>
+                      <ArrowUpRight className='size-4 shrink-0 text-muted-foreground group-hover:text-foreground' />
+                    </Link>
                   ))}
                 </div>
-              ) : (
-                <p className='px-2 py-3 text-sm text-muted-foreground'>
-                  No policy files found.
-                </p>
-              )}
-            </nav>
+              </ScrollArea>
+            ) : (
+              <p className='p-8 text-center text-sm text-muted-foreground'>
+                No traces are available for this proxy.
+              </p>
+            )}
+          </Card>
+        </Tabs.Content>
 
-            <div className='min-w-0 p-3 md:p-4'>
-              {policyFileSelected ? (
-                policyFileSelected.content ? (
+        <Tabs.Content
+          value='policies'
+          className='outline-none focus-visible:ring-2 focus-visible:ring-ring'
+        >
+          <Card className='gap-0 overflow-hidden py-0'>
+            <div className='flex min-w-0 items-center gap-2 border-b px-4 py-3 text-xs text-muted-foreground'>
+              <FileText className='size-4 shrink-0' />
+              <span className='truncate'>
+                {policyFileSelected?.name ??
+                  'Select a policy file to preview its contents.'}
+              </span>
+            </div>
+            <div className='grid min-w-0 grid-cols-1 md:grid-cols-[220px_minmax(0,1fr)]'>
+              <nav
+                aria-label='Policy files'
+                className='min-w-0 border-b p-2 md:border-b-0 md:border-r'
+              >
+                <ScrollArea className='h-40 md:h-[clamp(280px,55dvh,640px)]'>
+                  {loadStatus === 'loading' ? (
+                    <p
+                      role='status'
+                      className='p-3 text-sm text-muted-foreground'
+                    >
+                      Loading files…
+                    </p>
+                  ) : loadStatus === 'error' ? (
+                    <p className='p-3 text-sm text-muted-foreground'>
+                      Could not load policy files.
+                    </p>
+                  ) : htmlData?.filesLink.length ? (
+                    <div className='flex flex-col gap-1'>
+                      {htmlData.filesLink.map((file) => (
+                        <button
+                          key={file.name}
+                          type='button'
+                          aria-pressed={
+                            policyFileSelected?.name === file.name
+                          }
+                          title={file.name}
+                          onClick={() =>
+                            updateView({ file: file.name })
+                          }
+                          className={policyFileStyles({
+                            selected:
+                              policyFileSelected?.name === file.name,
+                          })}
+                        >
+                          <FileText className='size-4 shrink-0' />
+                          <span className='truncate'>
+                            {file.name}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className='p-3 text-sm text-muted-foreground'>
+                      No policy files found.
+                    </p>
+                  )}
+                </ScrollArea>
+              </nav>
+              <div className='min-w-0 p-3'>
+                {policyFileSelected?.content ? (
                   <ScrollArea
                     orientation='both'
-                    className='h-[360px] w-full rounded-md border bg-muted/20'
+                    className='h-[clamp(280px,55dvh,640px)] w-full rounded-md border bg-muted/20'
                   >
-                    <div className='flex min-w-max gap-4 p-4 font-mono text-xs leading-6 md:text-sm'>
-                      <pre className='select-none border-r pr-3 text-right text-muted-foreground'>
+                    <div className='flex min-w-max gap-4 p-4 font-mono text-xs leading-6'>
+                      <pre
+                        aria-hidden='true'
+                        className='select-none border-r pr-3 text-right text-muted-foreground'
+                      >
                         {linesOnText(policyFileSelected.content)}
                       </pre>
-                      <pre className='whitespace-pre'>
+                      <pre
+                        tabIndex={0}
+                        aria-label={`Contents of ${policyFileSelected.name}`}
+                        className='whitespace-pre'
+                      >
                         {policyFileSelected.content}
                       </pre>
                     </div>
                   </ScrollArea>
                 ) : (
-                  <div className='flex h-[360px] items-center justify-center rounded-md border border-dashed text-sm text-muted-foreground'>
-                    This file has no content to display.
+                  <div className='flex h-[clamp(280px,55dvh,640px)] flex-col items-center justify-center gap-3 rounded-md border border-dashed px-6 text-center text-sm text-muted-foreground'>
+                    <Network className='size-6' />
+                    <p>
+                      {policyFileSelected
+                        ? 'This file has no content to display.'
+                        : 'Select a policy file to preview its contents.'}
+                    </p>
                   </div>
-                )
-              ) : (
-                <div className='flex h-[360px] flex-col items-center justify-center gap-3 rounded-md border border-dashed px-6 text-center text-sm text-muted-foreground'>
-                  <Network className='size-6' />
-                  <p>Select a policy file to preview its contents.</p>
-                </div>
-              )}
+                )}
+              </div>
             </div>
-          </div>
-        </Card>
-      </section>
+          </Card>
+        </Tabs.Content>
+      </Tabs.Root>
     </main>
   );
 }
