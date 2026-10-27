@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.5.1](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/compare/v0.5.0...v0.5.1) (2026-10-27)
+
+
+### Bug Fixes
+
+* **diagnostics:** retain selections and reduce workspace clutter ([4bf197c](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/commit/4bf197c6f65b7a47ab4f69ed233a3e2397d2e3df))
+* **pac:** allow viewing original read-only source content ([8308c0b](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/commit/8308c0bbeadeb2978476b5eb616074ae9c7361b7))
+* **policy:** report inspection progress and bound per-proxy SSH waits ([fb0b5d0](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/commit/fb0b5d0d5ed97de26eea1434a4e6562fd84fd852))
+* **window:** restore edge resizing and show embedded pages during loading ([5bc1eed](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/commit/5bc1eede7c6a84e30d26935350b36675b21aa296))
+
 ## [0.5.0](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/compare/v0.4.0...v0.5.0) (2026-10-25)
 
 
