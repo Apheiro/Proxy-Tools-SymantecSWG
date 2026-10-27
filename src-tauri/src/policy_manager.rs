@@ -10,6 +10,13 @@ use std::{
     sync::{Arc, Mutex},
 };
 use tauri::{AppHandle, State};
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct InspectionUpdate {
+    pub id: String,
+    pub status: String,
+    pub message: String,
+}
 const VAULT: &str = "com.apheiros.proxytools/central-policy";
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -204,6 +211,7 @@ pub(crate) async fn inspect_policies(
     targets: Vec<Target>,
     username: String,
     password: String,
+    on_progress: tauri::ipc::Channel<InspectionUpdate>,
 ) -> Result<Census, String> {
     let root = root(&app)?;
     direct_settings(&root, mocked)?;
@@ -225,11 +233,27 @@ pub(crate) async fn inspect_policies(
         let user = username.clone();
         let pass = password.clone();
         let sem = semaphore.clone();
+        let progress = on_progress.clone();
         tasks.spawn(async move {
             let _permit = sem.acquire().await.map_err(|_| "Inspection cancelled.")?;
-            let result =
-                policy_remote::appliance(&root, &target.address, mocked, &user, &pass, None, None)
-                    .await;
+            let stage = Mutex::new(String::from("Starting SSH"));
+            let report = |message: &str| {
+                if let Ok(mut current) = stage.lock() {
+                    *current = message.to_owned();
+                }
+                let _ = progress.send(InspectionUpdate {
+                    id: target.id.clone(), status: "running".into(), message: message.into(),
+                });
+            };
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(240),
+                policy_remote::appliance_with_progress(
+                    &root, &target.address, mocked, &user, &pass, None, None, report,
+                ),
+            ).await.unwrap_or_else(|_| {
+                let current = stage.lock().map(|s| s.clone()).unwrap_or_default();
+                Err(format!("Inspection timed out after 240 seconds. Last step: {current}"))
+            });
             Ok::<_, String>((target, result))
         });
     }
@@ -257,6 +281,21 @@ pub(crate) async fn inspect_policies(
                 error: Some(error),
             },
         };
+        {
+            let message = row.error.clone().unwrap_or_else(|| {
+                if row.health.as_ref().is_some_and(|health| health.healthy) {
+                    "Policy received and structural checks completed.".into()
+                } else {
+                    format!("Policy received; review required: {}", row.health.as_ref()
+                        .map(|health| health.issues.join("; ")).unwrap_or_default())
+                }
+            });
+            let _ = on_progress.send(InspectionUpdate {
+                id: row.target.id.clone(),
+                status: if row.error.is_some() { "failed" } else { "complete" }.into(),
+                message,
+            });
+        }
         rows.push(row);
     }
     rows.sort_by(|a, b| a.target.name.cmp(&b.target.name));

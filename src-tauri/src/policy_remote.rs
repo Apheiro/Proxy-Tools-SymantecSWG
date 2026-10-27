@@ -104,11 +104,28 @@ pub(crate) async fn appliance(
     expected: Option<&str>,
     content: Option<&str>,
 ) -> Result<String, String> {
+    appliance_with_progress(root, address, mocked, user, password, expected, content, |_| {}).await
+}
+pub(crate) async fn appliance_with_progress(
+    root: &Path,
+    address: &str,
+    mocked: bool,
+    user: &str,
+    password: &str,
+    expected: Option<&str>,
+    content: Option<&str>,
+    progress: impl Fn(&str) + Send + Sync,
+) -> Result<String, String> {
     let target = SshTarget::appliance(address, mocked)?;
+    progress("Connecting and authenticating SSH");
     let connection = connect(root, &target.host, target.port, user, password, true).await?;
     let result=async {
+  progress("Opening appliance CLI and entering enable mode");
   let mut cli=connection.open_cli(target.startup,sgos_prompt_policy()).await?;
-  cli.enable(password).await?; cli.command(None,"config terminal").await?;
+  cli.enable(password).await?;
+  progress("Entering configuration mode: config terminal");
+  cli.command(None,"config terminal").await?;
+  progress("Reading Local Policy: show sources policy local (waiting for the CLI prompt)");
   let original=cli.capture("show sources policy local", LIMIT).await?;
   if let Some(expected)=expected {
    if policy_model::hash(&policy_model::canonical(&original))!=expected {return Err("Local Policy changed since inspection. This proxy was not modified; rescan and compare.".into());}
@@ -121,6 +138,7 @@ pub(crate) async fn appliance(
    Ok(saved)
   } else {Ok(original)}
  }.await;
+    progress("Disconnecting SSH");
     let _ = connection.disconnect().await;
     result
 }

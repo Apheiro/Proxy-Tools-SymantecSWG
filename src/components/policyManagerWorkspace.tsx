@@ -1,9 +1,10 @@
 'use client';
-import { invoke } from '@tauri-apps/api/core';
+import { Channel, invoke } from '@tauri-apps/api/core';
 import {
   Download,
   FileCode2,
   FilePlus2,
+  LoaderCircle,
   RefreshCw,
   ShieldCheck,
   Upload,
@@ -99,6 +100,13 @@ function PolicyWorkspace({ mocked }: { mocked: boolean }) {
     'direct',
   );
   const [census, setCensus] = useState<Census | null>(null);
+  const [inspecting, setInspecting] = useState(false);
+  const [inspectionRows, setInspectionRows] = useState<{
+    id: string;
+    name: string;
+    status: string;
+    message: string;
+  }[]>([]);
   const [source, setSource] = useState('');
   const [selected, setSelected] = useState<string[]>([]);
   const [original, setOriginal] = useState('');
@@ -269,11 +277,42 @@ function PolicyWorkspace({ mocked }: { mocked: boolean }) {
       const targets = policyTargets();
       if (!targets.length)
         throw new Error('Add proxies in Proxy Workspace first.');
-      const result = await invoke<Census>('inspect_policies', {
-        mocked,
-        targets,
-        ...credentials(),
-      });
+      const savedCredentials = credentials();
+      setInspectionRows(targets.map((target) => ({
+        id: target.id, name: target.name, status: 'pending',
+        message: 'Queued (up to four SSH connections at once)',
+      })));
+      setInspecting(true);
+      const onProgress = new Channel<{ id: string; status: string; message: string }>();
+      onProgress.onmessage = (update) => {
+        if (mounted.current) setInspectionRows((rows) => rows.map((row) =>
+          row.id === update.id ? { ...row, ...update } : row,
+        ));
+      };
+      let result: Census;
+      try {
+        result = await invoke<Census>('inspect_policies', {
+          mocked, targets, ...savedCredentials, onProgress,
+        });
+        if (mounted.current) setInspectionRows((rows) => rows.map((row) => {
+          const captured = result.rows.find((item) => item.target.id === row.id);
+          return captured ? {
+            ...row,
+            status: captured.error ? 'failed' : 'complete',
+            message: captured.error || (captured.health?.healthy
+              ? 'Policy received and structural checks completed.'
+              : `Policy received; review required: ${captured.health?.issues.join('; ') || 'Unknown format'}`),
+          } : row;
+        }));
+      } catch (error) {
+        if (mounted.current) setInspectionRows((rows) => rows.map((row) =>
+          row.status === 'pending' || row.status === 'running'
+            ? { ...row, status: 'failed', message: String(error) } : row,
+        ));
+        throw error;
+      } finally {
+        if (mounted.current) setInspecting(false);
+      }
       if (!mounted.current) return;
       setCensus(result);
       if (creatingNew) {
@@ -695,8 +734,8 @@ function PolicyWorkspace({ mocked }: { mocked: boolean }) {
                     disabled={blocked || (dirty && !creatingNew)}
                     onClick={scan}
                   >
-                    <RefreshCw className='size-3.5' />
-                    Inspect all
+                    {inspecting ? <LoaderCircle className='size-3.5 motion-safe:animate-spin' /> : <RefreshCw className='size-3.5' />}
+                    {inspecting ? 'Inspecting…' : 'Inspect all'}
                   </Button>
                 </div>
                 <p className='text-xs text-muted-foreground'>
@@ -704,6 +743,38 @@ function PolicyWorkspace({ mocked }: { mocked: boolean }) {
                   majority is a comparison baseline, not a guarantee
                   that its policy is correct.
                 </p>
+                {inspectionRows.length > 0 && (
+                  <div className='space-y-2' aria-label='Inspection progress' aria-busy={inspecting}>
+                    <div className='flex items-center justify-between gap-2 text-xs text-muted-foreground'>
+                      <span aria-live='polite'>
+                        {inspectionRows.filter((row) => row.status === 'complete' || row.status === 'failed').length} / {inspectionRows.length} proxies completed
+                      </span>
+                      <span>{inspecting ? 'Inspecting over SSH' : 'Inspection finished'}</span>
+                    </div>
+                    <progress
+                      className='h-1.5 w-full accent-primary'
+                      aria-label='Completed proxy inspections'
+                      max={inspectionRows.length}
+                      value={inspectionRows.filter((row) => row.status === 'complete' || row.status === 'failed').length}
+                    />
+                    <ScrollArea className='max-h-64 [&>[data-slot=scroll-area-viewport]]:max-h-64'>
+                      <div className='space-y-2 pr-3'>
+                        {inspectionRows.map((row) => (
+                          <div key={row.id} className='flex items-start gap-2 rounded-md border p-2 text-xs'>
+                            {row.status === 'running' && <LoaderCircle className='mt-0.5 size-3.5 shrink-0 motion-safe:animate-spin' />}
+                            <div className='min-w-0 flex-1'>
+                              <div className='flex flex-wrap justify-between gap-2'>
+                                <span className='font-medium'>{row.name}</span>
+                                <span className={row.status === 'failed' ? 'text-destructive' : 'text-muted-foreground'}>{row.status}</span>
+                              </div>
+                              <p className='mt-1 break-words text-muted-foreground'>{row.message}</p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </ScrollArea>
+                  </div>
+                )}
                 {census && (
                   <>
                     <p className='text-xs text-muted-foreground'>
