@@ -2,12 +2,16 @@
 
 import { isTauri } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { getCurrentWindow, type ResizeDirection } from '@tauri-apps/api/window';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Copy, Minus, Square, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+
+type ResizeDirection = Parameters<
+  ReturnType<typeof getCurrentWindow>['startResizeDragging']
+>[0];
 
 const resizeEdges: { direction: ResizeDirection; className: string }[] = [
   { direction: 'North', className: 'inset-x-2 top-0 h-1 cursor-n-resize' },
