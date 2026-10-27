@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.2](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/compare/v0.5.1...v0.5.2) (2026-10-27)
+
+
+### Bug Fixes
+
+* **window:** infer resize direction from the public Tauri API [skip ci] ([3bf4d66](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/commit/3bf4d669827c416ddb3695814c4cc4676cff3465))
+
 ## [0.5.1](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/compare/v0.5.0...v0.5.1) (2026-10-27)
 
 
