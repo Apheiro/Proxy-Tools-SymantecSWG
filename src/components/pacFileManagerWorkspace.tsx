@@ -1040,15 +1040,28 @@ export default function PacFileManagerWorkspace({
             <CardContent className='grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(220px,0.7fr)_auto] lg:items-end'>
               <div className='space-y-2'><label htmlFor='pac-test-url' className='text-sm font-medium'>Test URL against routing rules</label><div className='flex gap-2'><Input id='pac-test-url' placeholder='https://www.example.com/resource' value={testInput} onChange={(event) => setTestInput(event.target.value)} /><Button variant='outline' disabled={!testInput || Boolean(selected.parseError)} onClick={() => setTestUrl(testInput)}><Check className='size-4' />Evaluate</Button></div></div>
               <div className='space-y-2'><p className='text-sm font-medium'>Publishing</p><p className='text-xs text-muted-foreground'>Remote sources are read-only. Export the generated file and publish it using your server’s approved process.</p></div>
-              <div className='flex flex-wrap gap-2 lg:justify-end'><Button variant='outline' onClick={() => setPreviewOpen(true)} disabled={Boolean(selected.parseError)}><FileCode2 className='size-4' />Preview PAC</Button><Button variant='outline' onClick={exportPac}><Download className='size-4' />Export PAC</Button></div>
+              <div className='flex flex-wrap gap-2 lg:justify-end'><Button variant='outline' onClick={() => setPreviewOpen(true)} disabled={Boolean(selected.parseError) && !selected.remoteContent}><FileCode2 className='size-4' />{selected.parseError ? 'View original PAC' : 'Preview PAC'}</Button><Button variant='outline' onClick={exportPac}><Download className='size-4' />Export PAC</Button></div>
               {testUrl && <div className='rounded-md bg-muted p-3 text-sm lg:col-span-3'>{selected.parseError ? <span className='text-amber-600'>Not evaluated: this PAC contains logic outside the visual editor.</span> : preview.uncertain ? <span className='text-amber-700'>Preview is uncertain because an earlier condition needs DNS resolution or PAC runtime evaluation.</span> : matchedRule ? <>Matched <strong>{labelCondition(matchedRule.condition)}: {matchedRule.condition.value || 'default rule'}</strong> · destination <strong>{displayDestination(matchedRule.destination, proxies)}{(matchedRule.fallbacks?.length ?? 0) > 0 ? `; ${matchedRule.fallbacks?.map((destination) => displayDestination(destination, proxies)).join('; ')}` : ''}</strong></> : 'No rules matched, and no default rule is configured.'}</div>}
             </CardContent>
           </Card>
           <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
             <DialogContent className='max-h-[85dvh] sm:max-w-4xl'>
-              <DialogHeader><DialogTitle>Generated PAC preview</DialogTitle><DialogDescription>Review the PAC code generated from this source’s visual rules.</DialogDescription></DialogHeader>
-              {validateSource(selected).length > 0 && <p className='text-sm text-destructive'>{validateSource(selected)[0]}</p>}
-              <pre className='max-h-[65dvh] overflow-auto rounded-md bg-muted p-4 text-xs'>{validateSource(selected).length ? 'Fix the validation errors to generate a preview.' : generatePac(selected)}</pre>
+              <DialogHeader>
+                <DialogTitle>{selected.parseError ? 'Original PAC content' : 'Generated PAC preview'}</DialogTitle>
+                <DialogDescription>
+                  {selected.parseError
+                    ? 'Full downloaded source, available for reading and copying only.'
+                    : 'Review the PAC code generated from this source’s visual rules.'}
+                </DialogDescription>
+              </DialogHeader>
+              {!selected.parseError && validateSource(selected).length > 0 && <p className='text-sm text-destructive'>{validateSource(selected)[0]}</p>}
+              <pre tabIndex={0} aria-label='PAC source code' className='min-w-0 max-h-[65dvh] overflow-auto rounded-md bg-muted p-4 text-xs select-text'>
+                {selected.parseError
+                  ? selected.remoteContent
+                  : validateSource(selected).length
+                    ? 'Fix the validation errors to generate a preview.'
+                    : generatePac(selected)}
+              </pre>
             </DialogContent>
           </Dialog>
 
