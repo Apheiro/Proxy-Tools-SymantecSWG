@@ -45,7 +45,9 @@ export default function EmbeddedContent({
         again = true;
         return;
       }
-      if (!visible || !page.loaded) return;
+      // A hidden native webview can defer layout/loading until it is shown.
+      // Present after the modal animation, independently of load completion.
+      if (!visible) return;
       const rect = element.getBoundingClientRect();
       // Keep the native viewport size stable: animating width reflows remote pages.
       const bounds = {
@@ -87,7 +89,7 @@ export default function EmbeddedContent({
     };
     window.addEventListener('resize', resize);
     window.addEventListener('embedded:layout', resize);
-    if (!visible || !page.loaded)
+    if (!visible)
       void invoke('embedded_hide', { revision: version }).catch(
         (error) => {
           if (!disposed) setError(String(error));

@@ -197,6 +197,11 @@ pub async fn position(
             content.set_size_request(width.round() as i32, height.round() as i32);
             fixed.move_(&content, 0, 0);
             fixed.set_sensitive(true);
+            // Allocate and paint the newly positioned widget without waiting
+            // for an OS-level resize of the application window.
+            content.show();
+            fixed.queue_resize();
+            content.queue_draw();
             constrain_input(&overlay, &fixed);
             Ok(())
         })();

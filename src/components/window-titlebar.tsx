@@ -2,12 +2,23 @@
 
 import { isTauri } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { getCurrentWindow } from '@tauri-apps/api/window';
+import { getCurrentWindow, type ResizeDirection } from '@tauri-apps/api/window';
 import { Copy, Minus, Square, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+
+const resizeEdges: { direction: ResizeDirection; className: string }[] = [
+  { direction: 'North', className: 'inset-x-2 top-0 h-1 cursor-n-resize' },
+  { direction: 'South', className: 'inset-x-2 bottom-0 h-1 cursor-s-resize' },
+  { direction: 'West', className: 'inset-y-2 left-0 w-1 cursor-w-resize' },
+  { direction: 'East', className: 'inset-y-2 right-0 w-1 cursor-e-resize' },
+  { direction: 'NorthWest', className: 'left-0 top-0 size-2 cursor-nw-resize' },
+  { direction: 'NorthEast', className: 'right-0 top-0 size-2 cursor-ne-resize' },
+  { direction: 'SouthWest', className: 'left-0 bottom-0 size-2 cursor-sw-resize' },
+  { direction: 'SouthEast', className: 'right-0 bottom-0 size-2 cursor-se-resize' },
+];
 
 export default function WindowTitlebar({
   title = 'Proxy Tools',
@@ -81,6 +92,23 @@ export default function WindowTitlebar({
   };
 
   return (
+    <>
+    {!maximized && resizeEdges.map(({ direction, className: edgeClass }) => (
+      <div
+        key={direction}
+        aria-hidden='true'
+        className={cn('fixed z-[120] touch-none', edgeClass)}
+        onPointerDown={(event) => {
+          if (event.button !== 0) return;
+          event.preventDefault();
+          event.stopPropagation();
+          void getCurrentWindow().startResizeDragging(direction).catch((error) => {
+            console.error('Window resize failed:', error);
+            toast.error('Could not resize the window.');
+          });
+        }}
+      />
+    ))}
     <header
       data-slot='window-titlebar'
       className={cn(
@@ -137,5 +165,6 @@ export default function WindowTitlebar({
         </Button>
       </div>
     </header>
+    </>
   );
 }
