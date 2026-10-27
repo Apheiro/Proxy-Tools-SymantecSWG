@@ -1,6 +1,6 @@
 [package]
 name = "proxytools"
-version = "0.5.0"
+version = "0.5.1"
 description = "A Tauri App"
 authors = ["Eyen Tuyon"]
 edition = "2021"
