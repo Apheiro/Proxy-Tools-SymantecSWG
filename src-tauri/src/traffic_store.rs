@@ -520,6 +520,7 @@ pub struct TrafficQuery {
     pub network_prefix: Option<u8>,
     pub network: String,
     pub network_page: usize,
+    pub network_list_page: usize,
 }
 #[derive(Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -562,6 +563,7 @@ pub struct TrafficQueryResult {
     network_rankings: Vec<NetworkRanking>,
     network_members: Vec<Ranking>,
     network_member_count: usize,
+    network_count: usize,
     timeline: Vec<TrafficBucket>,
     records: Vec<AccessLogRecord>,
     page: usize,
@@ -653,23 +655,25 @@ fn network_rankings(
     predicate: &str,
     args: &[rusqlite::types::Value],
     summary: &TrafficSummary,
-) -> Result<(Vec<NetworkRanking>, Vec<Ranking>, usize), String> {
+) -> Result<(Vec<NetworkRanking>, Vec<Ranking>, usize, usize), String> {
     let Some(prefix) = query.network_prefix else {
-        return Ok((Vec::new(), Vec::new(), 0));
+        return Ok((Vec::new(), Vec::new(), 0, 0));
     };
     if prefix > 32 {
         return Err("IPv4 network prefix must be between 0 and 32.".into());
     }
     // Include empty and invalid clients as well as real IPs. Ordering here also
     // makes expanded member pagination deterministic and bounded in memory.
+    let by_bytes = query.metric == "bytes";
+    let metric = if by_bytes { "bytes" } else { "requests" };
+    let range_order = if by_bytes { "traffic" } else { "COUNT(*)" };
     let (sql, parameters) = if predicate == "1=1" {
         (
-            "SELECT name,requests,bytes FROM counters WHERE field='c-ip' ORDER BY bytes DESC,name"
-                .to_owned(),
+            format!("SELECT name,requests,bytes FROM counters WHERE field='c-ip' ORDER BY {metric} DESC,name"),
             Vec::new(),
         )
     } else {
-        (format!("SELECT COALESCE(client,''),COUNT(*),COALESCE(SUM(bytes),0) AS traffic FROM records r WHERE {predicate} GROUP BY client ORDER BY traffic DESC,client"), args.to_vec())
+        (format!("SELECT COALESCE(client,''),COUNT(*),COALESCE(SUM(bytes),0) AS traffic FROM records r WHERE {predicate} GROUP BY client ORDER BY {range_order} DESC,client"), args.to_vec())
     };
     let mut statement = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = statement
@@ -713,7 +717,7 @@ fn network_rankings(
                     } else {
                         client
                     },
-                    value: bytes,
+                    value: if by_bytes { bytes } else { requests },
                     requests,
                     bytes,
                     percentage: 0.,
@@ -738,8 +742,13 @@ fn network_rankings(
     }
     if let Some(group) = groups.get(&query.network) {
         for member in &mut members {
-            member.percentage = if group.bytes > 0 {
-                member.bytes as f64 * 100. / group.bytes as f64
+            let total = if by_bytes {
+                group.bytes
+            } else {
+                group.requests
+            };
+            member.percentage = if total > 0 {
+                member.value as f64 * 100. / total as f64
             } else {
                 0.
             };
@@ -747,15 +756,32 @@ fn network_rankings(
     }
     let mut groups: Vec<_> = groups.into_values().collect();
     for group in &mut groups {
-        group.percentage = if summary.bytes > 0 {
-            group.bytes as f64 * 100. / summary.bytes as f64
+        let total = if by_bytes {
+            summary.bytes
+        } else {
+            summary.requests
+        };
+        let value = if by_bytes {
+            group.bytes
+        } else {
+            group.requests
+        };
+        group.percentage = if total > 0 {
+            value as f64 * 100. / total as f64
         } else {
             0.
         };
     }
-    groups.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.name.cmp(&b.name)));
-    groups.truncate(query.limit.clamp(1, 50));
-    Ok((groups, members, member_count))
+    groups.sort_by(|a, b| {
+        let a_value = if by_bytes { a.bytes } else { a.requests };
+        let b_value = if by_bytes { b.bytes } else { b.requests };
+        b_value.cmp(&a_value).then_with(|| a.name.cmp(&b.name))
+    });
+    let network_count = groups.len();
+    let last_page = network_count.div_ceil(50).max(1);
+    let offset = (query.network_list_page.max(1).min(last_page) - 1) * 50;
+    let groups = groups.into_iter().skip(offset).take(50).collect();
+    Ok((groups, members, member_count, network_count))
 }
 
 // A bounded revision-aware cache reuses range analytics across pagination.
@@ -963,12 +989,13 @@ fn query_capture(
             serde_json::from_str(&row.map_err(|e| e.to_string())?).map_err(|e| e.to_string())?,
         );
     }
-    let (network_rankings, network_members, network_member_count) =
+    let (network_rankings, network_members, network_member_count, network_count) =
         network_rankings(&tx, &query, &predicate, &args, &summary)?;
     let result = TrafficQueryResult {
         network_rankings,
         network_members,
         network_member_count,
+        network_count,
         summary,
         rankings,
         timeline,

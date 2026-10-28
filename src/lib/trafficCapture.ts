@@ -60,6 +60,7 @@ export type CaptureResult = {
   }[];
   networkMembers?: CaptureRanking[];
   networkMemberCount?: number;
+  networkCount?: number;
   timeline: TrafficDataset['timeline'];
   records: TrafficRecord[];
   page: number;
