@@ -136,6 +136,10 @@ async fn send_request(
             crate::describe_request_error("connecting to the access log", url, error)
         })?;
     if response.status() == reqwest::StatusCode::UNAUTHORIZED { crate::proxy_transport::invalidate(url, username, password, use_mock_data); }
+    if !use_mock_data && response.url().path() == crate::management_login::LOGIN_PATH {
+        crate::proxy_transport::invalidate(url, username, password, false);
+        return Err("The proxy redirected access log retrieval to its login page. Retry to establish a new management session.".into());
+    }
     response
         .error_for_status()
         .map_err(|error| crate::describe_request_error("fetching access log data", url, error))
@@ -155,7 +159,7 @@ pub async fn get_traffic_access_logs(
     }
     let base = base_url(&proxy_ip, use_mock_data)?;
     let url = index_url(&base, use_mock_data)?;
-    let client = crate::proxy_transport::client_for(&url, &username, &password, use_mock_data)?;
+    let client = crate::proxy_transport::authenticated_client_for(&url, &username, &password, use_mock_data).await?;
     let mut response = send_request(&client, &url, &username, &password, use_mock_data).await?;
     let document_url = response.url().clone();
     // Only the index is finite. Bound it and ignore live-server scripts/footer.
@@ -174,6 +178,7 @@ pub async fn get_traffic_access_logs(
         })
         .await
         .map_err(|_| "Timed out reading the access log index.".to_string())??;
+    crate::proxy_transport::check_document(&html, &url, &username, &password, use_mock_data)?;
     let logs = parse_log_index(&html, &base, &document_url, use_mock_data);
     if logs.is_empty() {
         return Err(format!("No access log links were found in {url}."));
@@ -389,7 +394,7 @@ pub async fn start_traffic_stream(
         &log_name,
         use_mock_data,
     )?;
-    let client = crate::proxy_transport::client_for(&url, &username, &password, use_mock_data)?;
+    let client = crate::proxy_transport::authenticated_client_for(&url, &username, &password, use_mock_data).await?;
     let token = CancellationToken::new();
     let streams = Arc::clone(&state.0);
     let (capture_id, session) = create_capture_session(&app, url.to_string(), None)?;

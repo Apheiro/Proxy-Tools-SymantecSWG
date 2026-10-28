@@ -85,6 +85,7 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 mod utils;
 mod proxy_transport;
+mod management_login;
 mod proxy_network;
 mod credential_vault;
 mod credentials;
@@ -323,7 +324,7 @@ async fn start_logs(
     
 
     let request_url = reqwest::Url::parse(&url).map_err(|_| "Invalid trace URL.")?;
-    let client = match proxy_transport::client_for(&request_url, &user, &pass, use_mock_data) {
+    let client = match proxy_transport::authenticated_client_for(&request_url, &user, &pass, use_mock_data).await {
         Ok(client) => client,
         Err(error) => { state.cancel.lock().unwrap().take(); return Err(error); }
     };
@@ -379,6 +380,10 @@ async fn start_logs(
                         }
                     };
                     if token.is_cancelled() { break; }
+                    if let Err(message) = proxy_transport::check_document(&html_coded, &request_url, &user, &pass, use_mock_data) {
+                        let _ = app.emit("logs:error", &message);
+                        break;
+                    }
                     last_error = None;
                     let html = html_escape::decode_html_entities(&html_coded).into_owned();
 
@@ -480,7 +485,7 @@ async fn get_html_data(
             .map_err(|error| format!("Could not build policy URL: {error}"))?
     };
 
-    let client = proxy_transport::client_for(&url, userpr, passpr, use_mock_data)?;
+    let client = proxy_transport::authenticated_client_for(&url, userpr, passpr, use_mock_data).await?;
     let policy_request = client.get(url.clone()).timeout(Duration::from_secs(30));
     let policy_response = policy_request.send().await.map_err(|error| {
         describe_request_error("fetching the policy index", &url, error)
@@ -492,6 +497,7 @@ async fn get_html_data(
     let html = policy_response.text().await.map_err(|error| {
         describe_request_error("reading the policy index", &url, error)
     })?;
+    proxy_transport::check_document(&html, &url, userpr, passpr, use_mock_data)?;
 
     let html = html_escape::decode_html_entities(&html).into_owned();
 
@@ -593,6 +599,7 @@ async fn get_html_data(
         let text = response.text().await.map_err(|error| {
             describe_request_error(&format!("reading policy file '{name}'"), &file_url, error)
         })?;
+        proxy_transport::check_document(&text, &file_url, userpr, passpr, use_mock_data)?;
         let text = html_escape::decode_html_entities(&text).into_owned();
         let content = if let Some(cap) = re_pre.captures(&text) {
             cap.get(1)

@@ -21,6 +21,8 @@ pub struct EmbeddedPage {
     loaded: bool,
     #[serde(skip)]
     auth: Option<(String, String, tauri::Url, bool)>,
+    #[serde(skip)]
+    form_login_attempts: u8,
 }
 #[derive(Default)]
 struct Pages {
@@ -122,6 +124,30 @@ fn shortcut(app: &AppHandle, id: &str, action: &str) {
     }
 }
 
+fn submit_management_form(app: &AppHandle, id: &str) {
+    let submission = {
+        let state = app.state::<EmbeddedState>();
+        let Ok(mut pages) = state.pages.lock() else { return; };
+        let Some(page) = pages.entries.iter_mut().find(|page| page.id == id) else { return; };
+        let Some((user, password, origin, _)) = page.auth.clone() else { return; };
+        // The actual document is checked again in JS before any secret is set.
+        if tauri::Url::parse(&page.url).ok().is_none_or(|url| url.origin() != origin.origin()) { return; }
+        if page.form_login_attempts >= 3 { None } else {
+            page.form_login_attempts += 1;
+            Some(crate::management_login::submission_script(&origin.origin().ascii_serialization(), &user, &password))
+        }
+    };
+    if let Some(script) = submission {
+        if let Some(view) = app.get_webview(id) {
+            if view.eval(&script).is_err() {
+                let _ = app.emit_to("main", "embedded:authentication-error", serde_json::json!({"id":id,"message":"Could not submit the proxy management login form."}));
+            }
+        }
+    } else {
+        let _ = app.emit_to("main", "embedded:authentication-error", serde_json::json!({"id":id,"message":"The proxy returned to its login form after 3 authentication attempts. Check your saved credentials and account permissions."}));
+    }
+}
+
 fn create(
     app: AppHandle,
     url: tauri::Url,
@@ -176,6 +202,7 @@ fn create(
                 loading: true,
                 loaded: false,
                 auth,
+                form_login_attempts: 0,
             };
             p.entries.push(page.clone());
             p.revision += 1;
@@ -199,6 +226,10 @@ fn create(
         .initialization_script_for_all_frames(crate::embedded_shortcuts::script(&app))
         .on_navigation(move |target| {
             if target.scheme() == "embedded-control" {
+                if target.host_str() == Some("form-login") {
+                    submit_management_form(&nav_app, &nav_id);
+                    return false;
+                }
                 if target.host_str() == Some("shortcut") {
                     let action = target.path().trim_start_matches('/');
                     if ["previous", "next", "up", "down", "minimize", "close"].contains(&action) {
@@ -212,7 +243,7 @@ fn create(
             }
             allowed(target) && !local_app(&nav_app, target)
         })
-        .on_page_load(move |_view, payload| {
+        .on_page_load(move |view, payload| {
             if !allowed(payload.url()) {
                 return;
             }
@@ -225,6 +256,15 @@ fn create(
                     p.loaded = true;
                 }
             });
+            if !loading {
+                let auth = load_app.state::<EmbeddedState>().pages.lock().ok()
+                    .and_then(|pages| pages.entries.iter().find(|page| page.id == load_id).and_then(|page| page.auth.clone()));
+                if let Some((_, _, origin, _)) = auth {
+                    if payload.url().origin() == origin.origin() {
+                        let _ = view.eval(&crate::management_login::detection_script(&origin.origin().ascii_serialization()));
+                    }
+                }
+            }
         })
         .on_document_title_changed(move |_view, title| {
             if !title.trim().is_empty() {
