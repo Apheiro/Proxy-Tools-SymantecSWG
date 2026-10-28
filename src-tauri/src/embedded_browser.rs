@@ -470,6 +470,27 @@ pub async fn embedded_hide(webview: Webview, app: AppHandle, revision: u64) -> R
     Ok(())
 }
 #[tauri::command]
+pub async fn embedded_reset_session(webview: Webview, app: AppHandle, id: String) -> Result<(), String> {
+    trusted(&webview)?;
+    let state = app.state::<EmbeddedState>();
+    let _operation = state.operations.lock().await;
+    let origin = {
+        let pages = state.pages.lock().map_err(|_| "Embedded page state unavailable.")?;
+        let page = pages.entries.iter().find(|page| page.id == id)
+            .ok_or("Embedded page unavailable.")?;
+        let (_, _, url, _) = page.auth.as_ref().ok_or("This is not an authenticated management page.")?;
+        url.origin().ascii_serialization()
+    };
+    let view = app.get_webview(&id).ok_or("Embedded page unavailable.")?;
+    #[cfg(target_os = "windows")]
+    return crate::embedded_auth::reset_session(&view, origin).await;
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (view, origin);
+        Err("Automatic management session cleanup is available on Windows.".into())
+    }
+}
+#[tauri::command]
 pub async fn embedded_close(webview: Webview, app: AppHandle, id: String) -> Result<(), String> {
     trusted(&webview)?;
     let state = app.state::<EmbeddedState>();

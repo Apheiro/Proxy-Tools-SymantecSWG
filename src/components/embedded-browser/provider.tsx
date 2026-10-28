@@ -25,6 +25,15 @@ import { useAppPreferences } from '@/lib/appPreferences';
 import type { ShortcutAction } from '@/lib/shortcutBindings';
 import EmbeddedDock from './dock';
 import EmbeddedModal from './modal';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 
 type BrowserContext = {
   pages: EmbeddedPage[];
@@ -54,6 +63,10 @@ export default function EmbeddedBrowserProvider({
 }) {
   const preferences = useAppPreferences();
   const [pages, setPages] = useState<EmbeddedPage[]>([]);
+  const [authenticationError, setAuthenticationError] = useState<{
+    title: string;
+    message: string;
+  } | null>(null);
   const [activation, setActivation] = useState(0);
   const [frontOrder, setFrontOrder] = useState<string[]>([]);
   const closing = useRef(new Set<string>());
@@ -315,6 +328,30 @@ export default function EmbeddedBrowserProvider({
       await subscribe<string>('embedded:error', (message) =>
         toast.error(message),
       );
+      await subscribe<{ id: string; message: string }>(
+        'embedded:authentication-error',
+        (failure) => {
+          const title = pagesRef.current.find((page) => page.id === failure.id)?.title ?? 'Proxy page';
+          // Native webviews draw above HTML. Hide them before presenting the
+          // alert, and destroy only the failed page to end its auth loop.
+          minimize();
+          void (async () => {
+            try {
+              let cleanupMessage = 'The proxy site session was cleared before closing.';
+              try {
+                await invoke('embedded_reset_session', { id: failure.id });
+              } catch (error) {
+                cleanupMessage = `The page was closed, but session cleanup could not be completed: ${String(error)}`;
+              }
+              await close(failure.id);
+              await invoke('embedded_hide', { revision: nextPresentation() });
+              if (!disposed) setAuthenticationError({ title, message: `${failure.message} ${cleanupMessage}` });
+            } catch (error) {
+              if (!disposed) toast.error(`Could not display authentication error: ${String(error)}`);
+            }
+          })();
+        },
+      );
       const snapshot =
         await invoke<EmbeddedSnapshot>('embedded_list');
       if (!disposed) applySnapshot(snapshot);
@@ -379,6 +416,25 @@ export default function EmbeddedBrowserProvider({
       </div>
       <EmbeddedModal />
       <EmbeddedDock />
+      <AlertDialog open={!!authenticationError} onOpenChange={(open) => {
+        if (!open) setAuthenticationError(null);
+      }}>
+        <AlertDialogContent className='z-[111]' overlayClassName='z-[110]'>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Proxy authentication failed</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className='space-y-2'>
+                <p className='break-words font-medium text-foreground'>{authenticationError?.title}</p>
+                <p>{authenticationError?.message}</p>
+                <p>The failed page has been closed to stop further attempts.</p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogAction>Understood</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Context.Provider>
   );
 }

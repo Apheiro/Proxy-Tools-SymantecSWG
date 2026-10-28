@@ -103,7 +103,7 @@ export default function EmbeddedContent({
       window.removeEventListener('resize', resize);
       window.removeEventListener('embedded:layout', resize);
     };
-  }, [page.id, page.loaded, transition, visible, nextPresentation]);
+  }, [page.id, transition, visible, nextPresentation]);
   return (
     <section
       ref={slot}

@@ -113,7 +113,7 @@ mod embedded_auth;
 mod embedded_shortcuts;
 use embedded_shortcuts::{ShortcutState, embedded_set_shortcuts};
 mod embedded_browser;
-use embedded_browser::{EmbeddedState, embedded_open, embedded_list, embedded_present, embedded_hide, embedded_close, embedded_focus};
+use embedded_browser::{EmbeddedState, embedded_open, embedded_list, embedded_present, embedded_hide, embedded_reset_session, embedded_close, embedded_focus};
 mod traffic_pdf;
 use traffic_pdf::{save_traffic_pdf, open_traffic_pdf};
 mod traffic_analysis;
@@ -671,7 +671,7 @@ pub fn run() {
     .manage(TrafficStreamState::default())
     .manage(AccessLogParseState::default())
     .plugin(tauri_plugin_opener::init())
-    .invoke_handler(tauri::generate_handler![embedded_set_shortcuts, save_traffic_pdf, open_traffic_pdf, get_policy_settings, save_policy_settings, inspect_policies, read_policy_snapshot, read_central_policy, save_central_policy, compare_policy_text, get_policy_progress, distribute_policy, get_ssh_session, continue_ssh_console, close_other_ssh_profiles, connect_ssh_console, list_ssh_sessions, send_ssh_input, disconnect_ssh_console, interrupt_ssh_console, read_ssh_output, remove_ssh_session, check_app_update, download_app_update, open_update_folder, has_update_token, save_update_token, delete_update_token, start_backup, list_backups, read_backup, delete_backup, open_backup_folder, get_backup_status, read_management_credentials, save_management_credentials, delete_management_credentials, clear_management_sessions, getproxystatus, start_logs, stop_logs, embedded_open, embedded_list, embedded_present, embedded_hide, embedded_close, embedded_focus, get_html_data, fetch_pac_source, get_app_cache_paths, save_traffic_analysis, load_traffic_analysis, list_traffic_analyses, parse_access_log, get_mock_access_log, get_traffic_access_logs, start_traffic_stream, stop_traffic_stream, start_access_log_parse, append_access_log_parse_chunk, abort_access_log_parse, get_traffic_processing_config, query_traffic_capture])
+    .invoke_handler(tauri::generate_handler![embedded_set_shortcuts, save_traffic_pdf, open_traffic_pdf, get_policy_settings, save_policy_settings, inspect_policies, read_policy_snapshot, read_central_policy, save_central_policy, compare_policy_text, get_policy_progress, distribute_policy, get_ssh_session, continue_ssh_console, close_other_ssh_profiles, connect_ssh_console, list_ssh_sessions, send_ssh_input, disconnect_ssh_console, interrupt_ssh_console, read_ssh_output, remove_ssh_session, check_app_update, download_app_update, open_update_folder, has_update_token, save_update_token, delete_update_token, start_backup, list_backups, read_backup, delete_backup, open_backup_folder, get_backup_status, read_management_credentials, save_management_credentials, delete_management_credentials, clear_management_sessions, getproxystatus, start_logs, stop_logs, embedded_open, embedded_list, embedded_present, embedded_hide, embedded_reset_session, embedded_close, embedded_focus, get_html_data, fetch_pac_source, get_app_cache_paths, save_traffic_analysis, load_traffic_analysis, list_traffic_analyses, parse_access_log, get_mock_access_log, get_traffic_access_logs, start_traffic_stream, stop_traffic_stream, start_access_log_parse, append_access_log_parse_chunk, abort_access_log_parse, get_traffic_processing_config, query_traffic_capture])
     .run(context)
     .expect("error while running tauri application");
 }
