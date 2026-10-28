@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.6.0](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/compare/v0.5.1...v0.6.0) (2026-10-28)
+
+
+### Features
+
+* **traffic:** rank consumption by configurable client networks ([615f809](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/commit/615f8095707e75b34e29e67e8ef73b6f2bac5de4))
+
+
+### Bug Fixes
+
+* **browser:** stop authentication loops and reset failed proxy sessions ([35a933c](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/commit/35a933c4dc75f026df062014f84f42cc48900bf3))
+* **window:** infer resize direction from the public Tauri API [skip ci] ([152acdd](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/commit/152acdded24cef7663551174d29d079ffc6800bf))
+
 ## [0.5.1](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/compare/v0.5.0...v0.5.1) (2026-10-27)
 
 
