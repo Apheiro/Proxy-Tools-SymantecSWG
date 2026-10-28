@@ -113,6 +113,30 @@ export default function TrafficAnalysisWorkspace({
     'requests',
   );
   const [limit, setLimit] = useState(10);
+  const [clientGrouping, setClientGrouping] = useState<
+    'clients' | 'networks'
+  >('clients');
+  const [networkPrefix, setNetworkPrefix] = useState(24);
+  const [selectedNetwork, setSelectedNetwork] = useState('');
+  const [networkPage, setNetworkPage] = useState(1);
+  const networkMembersId = useId();
+  const changeGrouping = (
+    grouping: 'clients' | 'networks',
+    prefix = networkPrefix,
+  ) => {
+    setClientGrouping(grouping);
+    setNetworkPrefix(prefix);
+    setSelectedNetwork('');
+    setNetworkPage(1);
+    try {
+      localStorage.setItem(
+        'traffic-analysis-client-grouping',
+        JSON.stringify({ grouping, prefix }),
+      );
+    } catch {
+      /* Keep the current session usable without storage. */
+    }
+  };
   const [workers, setWorkers] = useState(0);
   const [zone, setZone] = useState('UTC');
   const [zones, setZones] = useState(['UTC']);
@@ -175,6 +199,23 @@ export default function TrafficAnalysisWorkspace({
     const available = trafficTimeZones();
     setZones(available);
     try {
+      const storedGrouping = localStorage.getItem(
+        'traffic-analysis-client-grouping',
+      );
+      if (storedGrouping) {
+        const stored = JSON.parse(storedGrouping);
+        if (
+          stored.grouping === 'clients' ||
+          stored.grouping === 'networks'
+        )
+          setClientGrouping(stored.grouping);
+        if (
+          Number.isInteger(stored.prefix) &&
+          stored.prefix >= 0 &&
+          stored.prefix <= 32
+        )
+          setNetworkPrefix(stored.prefix);
+      }
       const storedZone = localStorage.getItem(
         'traffic-analysis-timezone',
       );
@@ -197,12 +238,15 @@ export default function TrafficAnalysisWorkspace({
     setPage(1);
     setAnalysis(null);
     setSavedId('');
+    setSelectedNetwork('');
+    setNetworkPage(1);
     setExportingPdf(false);
     setExportMessage('');
     setRange({ start: null, end: null });
   }, [captureId]);
   useEffect(() => {
     setPage(1);
+    setNetworkPage(1);
   }, [filters, range.start, range.end, pageSize, tab]);
   useEffect(() => {
     setDraftStart(dateInput(range.start));
@@ -222,6 +266,13 @@ export default function TrafficAnalysisWorkspace({
       errorsOnly: tab === 'Errors & Security',
       limit,
       metric,
+      networkPrefix:
+        clientGrouping === 'networks' &&
+        (tab === 'Overview' || tab === 'Rankings')
+          ? networkPrefix
+          : null,
+      network: selectedNetwork,
+      networkPage,
     }),
     [
       filters,
@@ -232,6 +283,10 @@ export default function TrafficAnalysisWorkspace({
       tab,
       limit,
       metric,
+      clientGrouping,
+      networkPrefix,
+      selectedNetwork,
+      networkPage,
     ],
   );
   const queryKey = JSON.stringify(query);
@@ -1341,7 +1396,73 @@ export default function TrafficAnalysisWorkspace({
                     </div>
                     {(tab === 'Overview' || tab === 'Rankings') && (
                       <>
-                        <div className='flex justify-end gap-2'>
+                        <div className='flex flex-wrap items-center justify-end gap-3'>
+                          <label className='flex items-center gap-2 text-sm'>
+                            Clients
+                            <SelectField
+                              aria-label='Client ranking grouping'
+                              value={clientGrouping}
+                              onValueChange={(value) =>
+                                changeGrouping(
+                                  value === 'networks'
+                                    ? 'networks'
+                                    : 'clients',
+                                )
+                              }
+                            >
+                              <SelectOption value='clients'>
+                                Individual IPs
+                              </SelectOption>
+                              <SelectOption value='networks'>
+                                Network consumption
+                              </SelectOption>
+                            </SelectField>
+                          </label>
+                          {clientGrouping === 'networks' && (
+                            <label className='flex items-center gap-2 text-sm'>
+                              IPv4 prefix
+                              <SelectField
+                                aria-label='IPv4 network prefix'
+                                value={String(networkPrefix)}
+                                onValueChange={(value) =>
+                                  changeGrouping(
+                                    'networks',
+                                    Number(value),
+                                  )
+                                }
+                              >
+                                {[
+                                  32,
+                                  24,
+                                  16,
+                                  8,
+                                  ...Array.from(
+                                    { length: 33 },
+                                    (_, i) => i,
+                                  ).filter(
+                                    (i) =>
+                                      ![32, 24, 16, 8].includes(i),
+                                  ),
+                                ].map((prefix) => (
+                                  <SelectOption
+                                    key={prefix}
+                                    value={String(prefix)}
+                                  >
+                                    /{prefix}
+                                    {prefix === 32
+                                      ? ' · per IP'
+                                      : prefix === 24
+                                        ? ' · last octet'
+                                        : prefix === 16
+                                          ? ' · last two octets'
+                                          : prefix === 8
+                                            ? ' · last three octets'
+                                            : ' · custom'}
+                                  </SelectOption>
+                                ))}
+                              </SelectField>
+                            </label>
+                          )}
                           <label
                             htmlFor={`${rangeControlsId}-ranking`}
                             className='flex items-center gap-2 text-sm'
@@ -1415,14 +1536,37 @@ export default function TrafficAnalysisWorkspace({
                                   'cs-threat-risk',
                                 ],
                               ]
-                          ).map(([label, field]) => (
-                            <RankingCard
-                              key={field}
-                              title={label}
-                              entries={analysis.rankings[field] ?? []}
-                              metric={metric}
-                            />
-                          ))}
+                          ).map(([label, field]) =>
+                            field === 'c-ip' &&
+                            clientGrouping === 'networks' ? (
+                              <NetworkRankingCard
+                                key={field}
+                                analysis={analysis}
+                                selected={selectedNetwork}
+                                onSelect={(name) => {
+                                  setSelectedNetwork(
+                                    name === selectedNetwork
+                                      ? ''
+                                      : name,
+                                  );
+                                  setNetworkPage(1);
+                                }}
+                                page={networkPage}
+                                onPage={setNetworkPage}
+                                busy={analysisLoading}
+                                detailId={networkMembersId}
+                              />
+                            ) : (
+                              <RankingCard
+                                key={field}
+                                title={label}
+                                entries={
+                                  analysis.rankings[field] ?? []
+                                }
+                                metric={metric}
+                              />
+                            ),
+                          )}
                         </div>
                       </>
                     )}
@@ -1600,6 +1744,163 @@ export default function TrafficAnalysisWorkspace({
         </div>
       </ScrollArea>
     </main>
+  );
+}
+
+function NetworkRankingCard({
+  analysis,
+  selected,
+  onSelect,
+  page,
+  onPage,
+  busy,
+  detailId,
+}: {
+  analysis: CaptureResult;
+  selected: string;
+  onSelect: (name: string) => void;
+  page: number;
+  onPage: (page: number) => void;
+  busy: boolean;
+  detailId: string;
+}) {
+  const entries = analysis.networkRankings ?? [];
+  const maximum = Math.max(1, ...entries.map((entry) => entry.bytes));
+  const memberCount = analysis.networkMemberCount ?? 0;
+  const totalPages = Math.max(1, Math.ceil(memberCount / 50));
+  return (
+    <Card className='gap-3 py-4'>
+      <CardHeader className='px-4'>
+        <CardTitle className='text-base'>
+          Network consumption
+        </CardTitle>
+        <p className='text-xs text-muted-foreground'>
+          Ranked by bytes in the current selection. IPv6 and
+          missing/invalid IPs are listed separately.
+        </p>
+      </CardHeader>
+      <CardContent className='space-y-3 px-4'>
+        {entries.length ? (
+          entries.map((entry) => (
+            <div key={entry.name}>
+              <button
+                type='button'
+                aria-expanded={selected === entry.name}
+                aria-controls={
+                  selected === entry.name ? detailId : undefined
+                }
+                onClick={() => onSelect(entry.name)}
+                className='w-full space-y-1 rounded-md p-2 text-left outline-none hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-ring'
+              >
+                <div className='flex items-start justify-between gap-2 text-sm'>
+                  <span className='flex min-w-0 items-center gap-1 font-medium'>
+                    <ChevronDown
+                      className={`size-3.5 shrink-0 transition-transform ${selected === entry.name ? '' : '-rotate-90'}`}
+                    />
+                    <span className='break-all'>{entry.name}</span>
+                  </span>
+                  <span className='shrink-0 font-mono text-xs'>
+                    {formatBytes(entry.bytes)}{' '}
+                    <span className='text-muted-foreground'>
+                      ({entry.percentage.toFixed(1)}%)
+                    </span>
+                  </span>
+                </div>
+                <p className='text-xs text-muted-foreground'>
+                  {entry.requests.toLocaleString()} requests ·{' '}
+                  {entry.clients.toLocaleString()} distinct IPs
+                </p>
+                <progress
+                  aria-label={`Traffic relative to highest consumption: ${entry.name}`}
+                  className='h-1.5 w-full accent-primary'
+                  max={maximum}
+                  value={entry.bytes}
+                />
+              </button>
+              {selected === entry.name && (
+                <div
+                  id={detailId}
+                  className='mt-2 space-y-2 rounded-md border p-3'
+                  aria-busy={busy}
+                >
+                  {busy ? (
+                    <p
+                      role='status'
+                      className='flex items-center gap-2 text-xs text-muted-foreground'
+                    >
+                      <LoaderCircle className='size-3.5 motion-safe:animate-spin' />
+                      Loading network members…
+                    </p>
+                  ) : (
+                    <>
+                      <p className='text-xs text-muted-foreground'>
+                        IP · requests · bytes (% of this group)
+                      </p>
+                      <ScrollArea className='h-48'>
+                        <div className='space-y-2 pr-3'>
+                          {(analysis.networkMembers ?? []).map(
+                            (member) => (
+                              <div
+                                key={member.name}
+                                className='flex flex-wrap items-center justify-between gap-2 border-b pb-2 text-xs'
+                              >
+                                <span className='break-all font-mono'>
+                                  {member.name}
+                                </span>
+                                <span className='text-muted-foreground'>
+                                  {member.requests.toLocaleString()}{' '}
+                                  requests ·{' '}
+                                  {formatBytes(member.bytes)} (
+                                  {member.percentage.toFixed(1)}%)
+                                </span>
+                              </div>
+                            ),
+                          )}
+                          {!memberCount && (
+                            <p className='text-xs text-muted-foreground'>
+                              No individual client addresses are
+                              available for this group.
+                            </p>
+                          )}
+                        </div>
+                      </ScrollArea>
+                      {totalPages > 1 && (
+                        <div className='flex items-center justify-between gap-2 text-xs'>
+                          <Button
+                            variant='outline'
+                            size='sm'
+                            disabled={page <= 1}
+                            onClick={() => onPage(page - 1)}
+                          >
+                            Previous
+                          </Button>
+                          <span>
+                            {page} / {totalPages} ·{' '}
+                            {memberCount.toLocaleString()} values
+                          </span>
+                          <Button
+                            variant='outline'
+                            size='sm'
+                            disabled={page >= totalPages}
+                            onClick={() => onPage(page + 1)}
+                          >
+                            Next
+                          </Button>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          ))
+        ) : (
+          <p className='text-sm text-muted-foreground'>
+            No client traffic in this selection.
+          </p>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

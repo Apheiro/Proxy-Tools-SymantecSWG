@@ -517,6 +517,9 @@ pub struct TrafficQuery {
     pub page_size: usize,
     pub limit: usize,
     pub metric: String,
+    pub network_prefix: Option<u8>,
+    pub network: String,
+    pub network_page: usize,
 }
 #[derive(Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -541,11 +544,24 @@ pub struct Ranking {
     bytes: i64,
     percentage: f64,
 }
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkRanking {
+    name: String,
+    bytes: i64,
+    requests: i64,
+    clients: usize,
+    percentage: f64,
+}
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TrafficQueryResult {
     summary: TrafficSummary,
     rankings: HashMap<String, Vec<Ranking>>,
+    network_rankings: Vec<NetworkRanking>,
+    network_members: Vec<Ranking>,
+    network_member_count: usize,
     timeline: Vec<TrafficBucket>,
     records: Vec<AccessLogRecord>,
     page: usize,
@@ -607,6 +623,141 @@ fn conditions(query: &TrafficQuery) -> (String, Vec<rusqlite::types::Value>) {
         args,
     )
 }
+// Group complete client counters, never the already-truncated Top N ranking.
+// IPv6 and missing/invalid client values remain visible in separate buckets.
+fn client_network(client: &str, prefix: u8) -> (String, bool) {
+    match client.trim().parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(ip)) => {
+            let mask = if prefix == 0 {
+                0
+            } else {
+                u32::MAX << (32 - prefix)
+            };
+            (
+                format!(
+                    "{}/{}",
+                    std::net::Ipv4Addr::from(u32::from(ip) & mask),
+                    prefix
+                ),
+                true,
+            )
+        }
+        Ok(std::net::IpAddr::V6(_)) => ("IPv6 (not grouped by IPv4 prefix)".into(), true),
+        Err(_) => ("Missing / invalid client IP".into(), false),
+    }
+}
+
+fn network_rankings(
+    conn: &Connection,
+    query: &TrafficQuery,
+    predicate: &str,
+    args: &[rusqlite::types::Value],
+    summary: &TrafficSummary,
+) -> Result<(Vec<NetworkRanking>, Vec<Ranking>, usize), String> {
+    let Some(prefix) = query.network_prefix else {
+        return Ok((Vec::new(), Vec::new(), 0));
+    };
+    if prefix > 32 {
+        return Err("IPv4 network prefix must be between 0 and 32.".into());
+    }
+    // Include empty and invalid clients as well as real IPs. Ordering here also
+    // makes expanded member pagination deterministic and bounded in memory.
+    let (sql, parameters) = if predicate == "1=1" {
+        (
+            "SELECT name,requests,bytes FROM counters WHERE field='c-ip' ORDER BY bytes DESC,name"
+                .to_owned(),
+            Vec::new(),
+        )
+    } else {
+        (format!("SELECT COALESCE(client,''),COUNT(*),COALESCE(SUM(bytes),0) AS traffic FROM records r WHERE {predicate} GROUP BY client ORDER BY traffic DESC,client"), args.to_vec())
+    };
+    let mut statement = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let rows = statement
+        .query_map(params_from_iter(parameters.iter()), |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+    let mut groups: HashMap<String, NetworkRanking> = HashMap::new();
+    let mut members = Vec::new();
+    let mut member_count = 0_usize;
+    let offset = query
+        .network_page
+        .max(1)
+        .saturating_sub(1)
+        .saturating_mul(50);
+    let mut accounted_requests = 0;
+    let mut accounted_bytes = 0;
+    for row in rows {
+        let (client, requests, bytes) = row.map_err(|e| e.to_string())?;
+        accounted_requests += requests;
+        accounted_bytes += bytes;
+        let (name, valid) = client_network(&client, prefix);
+        let group = groups
+            .entry(name.clone())
+            .or_insert_with(|| NetworkRanking {
+                name: name.clone(),
+                ..Default::default()
+            });
+        group.requests += requests;
+        group.bytes += bytes;
+        group.clients += usize::from(valid);
+        if query.network == name {
+            if member_count >= offset && members.len() < 50 {
+                members.push(Ranking {
+                    name: if client.is_empty() {
+                        "(missing)".into()
+                    } else {
+                        client
+                    },
+                    value: bytes,
+                    requests,
+                    bytes,
+                    percentage: 0.,
+                });
+            }
+            member_count += 1;
+        }
+    }
+    // Empty client fields are excluded from the persisted dimension counters.
+    if predicate == "1=1" && accounted_requests < summary.requests {
+        let name = "Missing / invalid client IP".to_owned();
+        let group = groups
+            .entry(name.clone())
+            .or_insert_with(|| NetworkRanking {
+                name: name.clone(),
+                ..Default::default()
+            });
+        let bytes = summary.bytes - accounted_bytes;
+        let requests = summary.requests - accounted_requests;
+        group.bytes += bytes;
+        group.requests += requests;
+    }
+    if let Some(group) = groups.get(&query.network) {
+        for member in &mut members {
+            member.percentage = if group.bytes > 0 {
+                member.bytes as f64 * 100. / group.bytes as f64
+            } else {
+                0.
+            };
+        }
+    }
+    let mut groups: Vec<_> = groups.into_values().collect();
+    for group in &mut groups {
+        group.percentage = if summary.bytes > 0 {
+            group.bytes as f64 * 100. / summary.bytes as f64
+        } else {
+            0.
+        };
+    }
+    groups.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.name.cmp(&b.name)));
+    groups.truncate(query.limit.clamp(1, 50));
+    Ok((groups, members, member_count))
+}
+
 // A bounded revision-aware cache reuses range analytics across pagination.
 // No raw record pages are retained here; ingestion invalidates by persisted counts.
 static ANALYTICS_CACHE: OnceLock<Mutex<VecDeque<(String, TrafficQueryResult)>>> = OnceLock::new();
@@ -812,7 +963,12 @@ fn query_capture(
             serde_json::from_str(&row.map_err(|e| e.to_string())?).map_err(|e| e.to_string())?,
         );
     }
+    let (network_rankings, network_members, network_member_count) =
+        network_rankings(&tx, &query, &predicate, &args, &summary)?;
     let result = TrafficQueryResult {
+        network_rankings,
+        network_members,
+        network_member_count,
         summary,
         rankings,
         timeline,

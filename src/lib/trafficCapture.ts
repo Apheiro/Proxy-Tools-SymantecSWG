@@ -51,6 +51,15 @@ export type CaptureResult = {
     bytesPerSecond: number;
   };
   rankings: Record<string, CaptureRanking[]>;
+  networkRankings?: {
+    name: string;
+    requests: number;
+    bytes: number;
+    clients: number;
+    percentage: number;
+  }[];
+  networkMembers?: CaptureRanking[];
+  networkMemberCount?: number;
   timeline: TrafficDataset['timeline'];
   records: TrafficRecord[];
   page: number;
