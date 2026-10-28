@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/compare/v0.6.0...v0.7.0) (2026-10-28)
+
+
+### Features
+
+* **traffic:** add complete paginated IP network analysis with selectable metrics ([34b1fc7](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/commit/34b1fc7d805e3ce28b5b364c5b124454afea02e4))
+
 ## [0.6.0](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/compare/v0.5.1...v0.6.0) (2026-10-28)
 
 
