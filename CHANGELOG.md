@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.0](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/compare/v0.7.0...v0.8.0) (2026-10-29)
+
+
+### Features
+
+* **auth:** support SGOS management form login alongside Basic auth [skip ci] ([58271e4](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/commit/58271e484c3a03081e02b11c2359bfca4acbc9d7))
+* **proxies:** associate ISG hosts and connect SSH with separate credentials ([3ca15a1](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/commit/3ca15a17464ec05f1ea2bf2b5c26abc1e90a99bf))
+
 ## [0.7.0](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/compare/v0.6.0...v0.7.0) (2026-10-28)
 
 
