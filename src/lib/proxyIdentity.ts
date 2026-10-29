@@ -125,6 +125,7 @@ export function mergeProxyCheck(
     ...check,
     // Tags and registered identity belong to the inventory, not the network response.
     tags: saved.tags,
+    isg_appliance: saved.isg_appliance,
     hostname:
       knownProxyHostname(check) ??
       knownProxyHostname(saved) ??

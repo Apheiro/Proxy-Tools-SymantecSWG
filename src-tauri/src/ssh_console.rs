@@ -40,6 +40,7 @@ pub struct ConsoleSession {
     appliance: String,
     address: String,
     mocked: bool,
+    target_kind: String,
     created_at: String,
     phase: String,
     connected: bool,
@@ -71,7 +72,10 @@ pub struct ConnectRequest {
     username: String,
     password: String,
     mocked: bool,
+    #[serde(default = "proxy_target_kind")]
+    target_kind: String,
 }
+fn proxy_target_kind() -> String { "proxy".into() }
 fn change(state: &Arc<Mutex<ConsoleSession>>, update: impl FnOnce(&mut ConsoleSession)) {
     update(&mut state.lock().unwrap_or_else(|e| e.into_inner()));
 }
@@ -99,6 +103,7 @@ pub fn list_ssh_sessions(state: State<'_, ConsoleState>) -> Vec<ConsoleSummary> 
                     appliance: s.appliance.clone(),
                     address: s.address.clone(),
                     mocked: s.mocked,
+                    target_kind: s.target_kind.clone(),
                     created_at: s.created_at.clone(),
                     phase: s.phase.clone(),
                     connected: s.connected,
@@ -133,6 +138,7 @@ pub fn connect_ssh_console(
     state: State<'_, ConsoleState>,
     request: ConnectRequest,
 ) -> Result<String, String> {
+    if !matches!(request.target_kind.as_str(), "proxy" | "isg") { return Err("Unknown SSH target kind.".into()); }
     let target = SshTarget::appliance(&request.address, request.mocked)?;
     if request.username.trim().is_empty()
         || request.password.is_empty()
@@ -165,6 +171,7 @@ pub fn connect_ssh_console(
         appliance: request.appliance.clone(),
         address: request.address.clone(),
         mocked: request.mocked,
+        target_kind: request.target_kind.clone(),
         created_at: chrono::Utc::now().to_rfc3339(),
         phase: "Connecting".into(),
         connected: false,
@@ -464,6 +471,15 @@ fn input_mode(tail: &[u8], base: Option<&str>) -> (&'static str, Option<String>)
     if let Some((_, value)) = ssh_client::prompt(tail, base, &sgos_prompt_policy()) {
         return ("command", Some(value));
     }
+    // ISG puts configuration context before the privilege marker, unlike SGOS.
+    static ISG_PROMPT: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(||
+        regex::Regex::new(r"^([A-Za-z0-9_. /:-]{1,120})(?:\([A-Za-z0-9_. /:-]{1,120}\))?[>#]$").unwrap());
+    let full_line = clean.trim_end().rsplit('\n').next().unwrap_or("").trim();
+    if let Some(captures) = ISG_PROMPT.captures(full_line) {
+        if base.is_none_or(|base| base == &captures[1]) {
+            return ("command", Some(if base.is_some() { full_line.to_owned() } else { captures[1].to_owned() }));
+        }
+    }
     if line.contains("--more--")
         || line.contains("press any key")
         || line.ends_with("[y/n]")
@@ -689,6 +705,7 @@ mod tests {
             appliance: "dummy".into(),
             address: "127.0.0.1".into(),
             mocked: true,
+            target_kind: "proxy".into(),
             created_at: String::new(),
             phase: "Connecting".into(),
             connected: false,

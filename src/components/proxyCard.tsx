@@ -6,6 +6,8 @@ import {
   AppWindow,
   MoreHorizontal,
   ScrollText,
+  Server,
+  Settings2,
   Stethoscope,
   Tags,
   Terminal,
@@ -50,6 +52,7 @@ import { getLocalStorage } from '@/lib/utilsClient';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import ProxyTagsEditor from '@/components/proxyTagsEditor';
+import ProxyIsgDialog from '@/components/proxyIsgDialog';
 import { useEmbeddedBrowser } from '@/components/embedded-browser/provider';
 import { useAppPreferences } from '@/lib/appPreferences';
 import {
@@ -266,14 +269,17 @@ export default function ProxyCard({
   deleteProxy,
   availableTags,
   onTagsChange,
+  onIsgChange,
 }: {
   proxy: Proxy;
   deleteProxy: (proxy: Proxy) => void;
   availableTags: string[];
   onTagsChange: (proxy: Proxy, tags: string[]) => void;
+  onIsgChange: (proxy: Proxy, appliance?: IsgAppliance) => void;
 }) {
   const [openLog, setOpenLog] = useState(false);
   const [openTags, setOpenTags] = useState(false);
+  const [openIsg, setOpenIsg] = useState(false);
   const { mode, ready: modeReady } = useDataSourceMode();
   const [delAlert, setOpenAlert] = useState(false);
   const [openLogin, setOpenLogin] = useState(false);
@@ -333,6 +339,27 @@ export default function ProxyCard({
     setPendingProxyUrl(null);
   };
 
+  const isgSshRoute = {
+    pathname: '/Diagnostics/SSH',
+    query: {
+      proxy: proxyAddress,
+      target: 'isg',
+      host: proxy.isg_appliance?.address ?? '',
+      name: proxy.isg_appliance?.name ?? '',
+    },
+  };
+  const openIsgAppliance = () => {
+    if (!proxy.isg_appliance?.url || !modeReady) return;
+    // ISG is a separate management origin/account. Do not send proxy credentials.
+    void embeddedBrowser.open({
+      url:
+        mode === 'mock'
+          ? 'https://httpbin.org/forms/post'
+          : proxy.isg_appliance.url,
+      title: `ISG · ${proxy.isg_appliance.name}`,
+    });
+  };
+
   const preferences = useAppPreferences();
   const ActionItem = preferences.proxyContextMenu
     ? ContextMenuItem
@@ -349,6 +376,26 @@ export default function ProxyCard({
           <Terminal className='size-4' />
           SSH connection
         </Link>
+      </ActionItem>
+      {proxy.isg_appliance && (
+        <ActionItem asChild>
+          <Link href={isgSshRoute}>
+            <Server className='size-4' />
+            ISG SSH connection
+          </Link>
+        </ActionItem>
+      )}
+      {proxy.isg_appliance?.url && (
+        <ActionItem onSelect={openIsgAppliance} disabled={!modeReady}>
+          <Server className='size-4' />
+          Open ISG console
+        </ActionItem>
+      )}
+      <ActionItem onSelect={() => setOpenIsg(true)}>
+        <Settings2 className='size-4' />
+        {proxy.isg_appliance
+          ? 'Edit ISG appliance'
+          : 'Assign ISG appliance'}
       </ActionItem>
       <ActionItem onSelect={() => setOpenTags(true)}>
         <Tags className='size-4' />
@@ -474,6 +521,25 @@ export default function ProxyCard({
                   </TooltipOne>
                 )}
               </CardTitle>
+              {proxy.isg_appliance && (
+                <TooltipOne
+                  content={`Hosted on ISG: ${proxy.isg_appliance.name} · ${proxy.isg_appliance.address}`}
+                >
+                  <Link
+                    href={isgSshRoute}
+                    aria-label={`Connect SSH to ISG appliance ${proxy.isg_appliance.name}`}
+                    className='inline-flex rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+                  >
+                    <Badge
+                      variant='secondary'
+                      className='cursor-pointer gap-1'
+                    >
+                      <Server className='size-3' />
+                      ISG
+                    </Badge>
+                  </Link>
+                </TooltipOne>
+              )}
               <TooltipOne
                 content={
                   proxy.active
@@ -547,6 +613,13 @@ export default function ProxyCard({
                 ))}
               </div>
             )}
+            <ProxyIsgDialog
+              open={openIsg}
+              onOpenChange={setOpenIsg}
+              appliance={proxy.isg_appliance}
+              proxyName={proxy.hostname}
+              onSave={(appliance) => onIsgChange(proxy, appliance)}
+            />
             <ProxyTagsEditor
               tags={normalizeProxyTags(proxy.tags)}
               availableTags={availableTags}

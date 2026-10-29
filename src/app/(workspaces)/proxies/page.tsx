@@ -172,6 +172,20 @@ export default function Page() {
       return updated;
     });
   };
+  const updateIsgAppliance = (
+    target: Proxy,
+    appliance?: IsgAppliance,
+  ) => {
+    setProxies((current) => {
+      const updated = current.map((proxy) =>
+        inventoryProxyId(proxy) === inventoryProxyId(target)
+          ? { ...proxy, isg_appliance: appliance }
+          : proxy,
+      );
+      postLocalStorage('proxies', updated);
+      return updated;
+    });
+  };
   const changeGrouping = (next: ProxyGrouping) => {
     setGrouping(next);
     postLocalStorage(PROXY_GROUPING_KEY, next);
@@ -425,6 +439,7 @@ export default function Page() {
                       deleteProxy={deleteProxy}
                       availableTags={allTags}
                       onTagsChange={updateTags}
+                      onIsgChange={updateIsgAppliance}
                     />
                   ))}
                 </div>

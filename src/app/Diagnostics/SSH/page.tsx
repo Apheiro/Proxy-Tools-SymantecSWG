@@ -5,7 +5,17 @@ import SshConsoleWorkspace from '@/components/sshConsoleWorkspace';
 
 function ConsolePage() {
   const params = useSearchParams();
-  return <SshConsoleWorkspace address={params.get('proxy') ?? ''} />;
+  const isg = params.get('target') === 'isg';
+  return (
+    <SshConsoleWorkspace
+      key={`${isg ? 'isg' : 'proxy'}:${isg ? params.get('host') : params.get('proxy')}`}
+      address={(isg ? params.get('host') : params.get('proxy')) ?? ''}
+      targetKind={isg ? 'isg' : 'proxy'}
+      applianceName={
+        isg ? (params.get('name') ?? undefined) : undefined
+      }
+    />
+  );
 }
 export default function Page() {
   return (

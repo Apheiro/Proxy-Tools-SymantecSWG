@@ -7,6 +7,12 @@ declare interface Hostinfo {
   dnsip: string;
 }
 
+declare interface IsgAppliance {
+  name: string;
+  address: string;
+  url?: string;
+}
+
 declare interface Proxy {
   pinglog: string;
   hostname: string;
@@ -20,6 +26,8 @@ declare interface Proxy {
   primary_address?: string;
   /** User-defined inventory labels, independent of reachability results. */
   tags?: string[];
+  /** User-assigned Symantec ISG host; separate from the proxy management address. */
+  isg_appliance?: IsgAppliance;
 }
 
 declare interface Credentials {

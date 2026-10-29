@@ -10,6 +10,7 @@ export interface SshSession {
   appliance: string;
   address: string;
   mocked: boolean;
+  targetKind?: 'proxy' | 'isg';
   createdAt: string;
   phase: string;
   connected: boolean;

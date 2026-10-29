@@ -27,6 +27,14 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { SelectField, SelectOption } from '@/components/ui/select';
 import {
   displayBackupLine,
@@ -637,14 +645,27 @@ function SessionConsole({
 
 export default function SshConsoleWorkspace({
   address,
+  targetKind = 'proxy',
+  applianceName,
 }: {
   address: string;
+  targetKind?: 'proxy' | 'isg';
+  applianceName?: string;
 }) {
   const { mode, ready } = useDataSourceMode();
   const [sessions, setSessions] = useState<SshSession[]>([]);
   const [selected, setSelected] = useState('');
   const [desktop, setDesktop] = useState(false);
   const [connecting, setConnecting] = useState(false);
+  const [isgAuthOpen, setIsgAuthOpen] = useState(false);
+  const [isgUsername, setIsgUsername] = useState('');
+  const [isgPassword, setIsgPassword] = useState('');
+  const authId = useId();
+  useEffect(() => {
+    setIsgAuthOpen(false);
+    setIsgUsername('');
+    setIsgPassword('');
+  }, [mode, address, targetKind]);
   const [loadError, setLoadError] = useState('');
   const cache = useRef(new Map<string, SshSession>());
   const refresh = useCallback(async () => {
@@ -696,24 +717,44 @@ export default function SshConsoleWorkspace({
     };
   }, [refresh]);
   const available = sessions.filter(
-    (s) => s.address === address && s.mocked === (mode === 'mock'),
+    (s) =>
+      s.address === address &&
+      s.mocked === (mode === 'mock') &&
+      (s.targetKind ?? 'proxy') === targetKind,
   );
   const session =
     available.find((s) => s.id === selected) ?? available[0];
-  const connect = async () => {
+  const connect = async (provided?: Credentials) => {
+    if (targetKind === 'isg' && !provided) {
+      setIsgUsername('');
+      setIsgPassword('');
+      setIsgAuthOpen(true);
+      return;
+    }
     setConnecting(true);
+    setIsgAuthOpen(false);
+    setIsgPassword('');
     try {
-      await initializeCredentials();
-      const credentials = getCredentials();
+      let credentials: Credentials | null;
+      if (targetKind === 'isg') {
+        credentials = provided ?? null;
+      } else {
+        await initializeCredentials();
+        credentials = getCredentials();
+      }
       if (!credentials)
         throw new Error(
-          'Save SSH credentials in Settings before connecting.',
+          targetKind === 'isg'
+            ? 'Enter the ISG SSH account and password.'
+            : 'Save SSH credentials in Settings before connecting.',
         );
       const appliance =
-        findBackupAppliance(
-          getLocalStorage<Proxy[]>('proxies') ?? [],
-          address,
-        )?.hostname ?? address;
+        targetKind === 'isg'
+          ? applianceName || address
+          : (findBackupAppliance(
+              getLocalStorage<Proxy[]>('proxies') ?? [],
+              address,
+            )?.hostname ?? address);
       const id = await invoke<string>('connect_ssh_console', {
         request: {
           appliance,
@@ -721,6 +762,7 @@ export default function SshConsoleWorkspace({
           username: credentials.username,
           password: credentials.password,
           mocked: mode === 'mock',
+          targetKind,
         },
       });
       setSelected(id);
@@ -733,10 +775,101 @@ export default function SshConsoleWorkspace({
   };
   return (
     <main className='mx-auto flex h-[calc(100dvh-90px)] min-h-[620px] w-full max-w-screen-2xl flex-col gap-4 p-4 md:p-5'>
+      <Dialog
+        open={isgAuthOpen}
+        onOpenChange={(open) => {
+          setIsgAuthOpen(open);
+          if (!open) setIsgPassword('');
+        }}
+      >
+        <DialogContent className='sm:max-w-md'>
+          <DialogHeader>
+            <DialogTitle>ISG SSH credentials</DialogTitle>
+            <DialogDescription>
+              {applianceName || address} ·{' '}
+              {mode === 'mock'
+                ? 'Mock destination: 127.0.0.1:2222'
+                : `${address}:22`}
+              . Use the ISG account, which is separate from the proxy
+              account. Credentials are used only for this session.
+            </DialogDescription>
+          </DialogHeader>
+          <form
+            className='space-y-4'
+            onSubmit={(event) => {
+              event.preventDefault();
+              void connect({
+                username: isgUsername.trim(),
+                password: isgPassword,
+              });
+            }}
+          >
+            <div className='space-y-2'>
+              <label
+                htmlFor={`${authId}-user`}
+                className='text-sm font-medium'
+              >
+                Username
+              </label>
+              <Input
+                id={`${authId}-user`}
+                autoComplete='off'
+                value={isgUsername}
+                onChange={(event) =>
+                  setIsgUsername(event.target.value)
+                }
+                required
+              />
+            </div>
+            <div className='space-y-2'>
+              <label
+                htmlFor={`${authId}-pass`}
+                className='text-sm font-medium'
+              >
+                Password
+              </label>
+              <Input
+                id={`${authId}-pass`}
+                type='password'
+                autoComplete='off'
+                value={isgPassword}
+                onChange={(event) =>
+                  setIsgPassword(event.target.value)
+                }
+                required
+              />
+            </div>
+            <DialogFooter>
+              <Button
+                type='button'
+                variant='outline'
+                onClick={() => {
+                  setIsgAuthOpen(false);
+                  setIsgPassword('');
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                type='submit'
+                disabled={
+                  connecting || !isgUsername.trim() || !isgPassword
+                }
+              >
+                Connect ISG
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
       <PageHeader
         icon={Terminal}
-        eyebrow='Proxy workspace'
-        title='SSH console'
+        eyebrow={
+          targetKind === 'isg' ? 'ISG appliance' : 'Proxy workspace'
+        }
+        title={
+          targetKind === 'isg' ? 'ISG SSH console' : 'SSH console'
+        }
         description={`${address || 'No proxy selected'} · Persistent interactive sessions`}
         actions={
           <div className='flex items-center gap-2'>
@@ -810,8 +943,10 @@ export default function SshConsoleWorkspace({
             Connect to your appliance
           </h2>
           <p className='max-w-md text-sm text-muted-foreground'>
-            Start a session using your saved SSH credentials. The
-            connection stays active while you navigate the app.
+            {targetKind === 'isg'
+              ? 'Start a session with the ISG account and password. Proxy credentials are never reused; ISG credentials are not saved. Enter enable interactively if needed.'
+              : 'Start a session using your saved SSH credentials.'}{' '}
+            The connection stays active while you navigate the app.
             Outputs are stored in the app cache and loaded in small
             segments.
           </p>
