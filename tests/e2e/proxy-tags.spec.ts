@@ -213,3 +213,50 @@ test('mobile add proxy form uses one explicit action and keeps existing inventor
     path: testInfo.outputPath('proxy-card-mobile.png'),
   });
 });
+
+test('tag groups sort proxies naturally and stably without changing inventory or memberships', async ({
+  page,
+}) => {
+  await page.evaluate(() => {
+    const base = JSON.parse(localStorage.getItem('proxies')!)[0];
+    const inventory = ['EDGE-10', 'edge-2', 'EDGE-1', 'EDGE-2'].map(
+      (hostname, index) => ({
+        ...base,
+        hostname,
+        registered_address: `proxy-${index}`,
+        primary_address: `192.0.2.${index + 10}`,
+        tags: index === 2 ? [] : ['Lab', 'QA'],
+      }),
+    );
+    localStorage.setItem('proxies', JSON.stringify(inventory));
+    localStorage.setItem(
+      'proxy-inventory-grouping',
+      JSON.stringify({ groupBy: 'tags', tag: '' }),
+    );
+  });
+  await page.reload();
+  await expect(
+    page.getByRole('heading', {
+      name: 'Proxy workspace',
+      exact: true,
+    }),
+  ).toBeVisible({ timeout: 15000 });
+  for (const name of ['Lab', 'QA']) {
+    const region = page.getByRole('region', { name, exact: true });
+    await expect(
+      region.locator('[data-slot="card-title"]'),
+    ).toHaveText(['edge-2', 'EDGE-2', 'EDGE-10']);
+  }
+  await expect(
+    page
+      .getByRole('region', { name: 'Untagged', exact: true })
+      .locator('[data-slot="card-title"]'),
+  ).toHaveText(['EDGE-1']);
+  expect(
+    await page.evaluate(() =>
+      JSON.parse(localStorage.getItem('proxies')!).map(
+        (p: Proxy) => p.hostname,
+      ),
+    ),
+  ).toEqual(['EDGE-10', 'edge-2', 'EDGE-1', 'EDGE-2']);
+});

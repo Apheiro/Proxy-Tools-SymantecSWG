@@ -34,17 +34,28 @@ export function groupProxies(
 ) {
   if (grouping.groupBy === 'none')
     return [{ key: '', label: '', proxies }];
+  // Explicit locale and stable sort keep equal names in inventory order.
+  const collator = new Intl.Collator('en', {
+    numeric: true,
+    sensitivity: 'base',
+  });
+  const sorted = [...proxies].sort((a, b) =>
+    collator.compare(
+      a.hostname || inventoryProxyId(a),
+      b.hostname || inventoryProxyId(b),
+    ),
+  );
   const groups = inventoryTags(proxies).map((tag) => ({
     key: `tag:${tag}`,
     label: tag,
-    proxies: proxies.filter((proxy) =>
+    proxies: sorted.filter((proxy) =>
       normalizeProxyTags(proxy.tags).some(
         (value) =>
           value.toLocaleLowerCase() === tag.toLocaleLowerCase(),
       ),
     ),
   }));
-  const untagged = proxies.filter(
+  const untagged = sorted.filter(
     (proxy) => !normalizeProxyTags(proxy.tags).length,
   );
   if (untagged.length)
