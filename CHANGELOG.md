@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.9.0](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/compare/v0.8.0...v0.9.0) (2026-11-03)
+
+
+### Features
+
+* **pac:** compare raw WPAD downloads and reuse registration form ([7ff3d08](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/commit/7ff3d085204b3dc99ec51af0061ca357695e64df))
+
+
+### Bug Fixes
+
+* **proxies:** sort proxies naturally within tag groups ([1deb407](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/commit/1deb407d4125a63c454bde14fa2bc18a4a61c792))
+
 ## [0.8.0](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/compare/v0.7.0...v0.8.0) (2026-10-29)
 
 
