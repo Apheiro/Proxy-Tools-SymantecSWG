@@ -57,6 +57,8 @@ export type PacSource = {
   entryPoint?: 'legacy' | 'ipv6';
   prefix?: string;
   suffix?: string;
+  /** Last complete downloaded text; never generated from visual rules. */
+  downloadedContent?: string;
   remoteContent?: string;
   lastSyncedAt?: string;
   status: PacStatus;

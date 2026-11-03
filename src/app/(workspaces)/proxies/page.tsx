@@ -1,7 +1,6 @@
 /** biome-ignore-all lint/style/useNamingConvention: <> */
 /** biome-ignore-all lint/performance/noImgElement: <> */
 'use client';
-import { useForm } from '@mantine/form';
 import { invoke } from '@tauri-apps/api/core';
 import { some } from 'lodash-es';
 import {
@@ -10,21 +9,13 @@ import {
   Server,
   ShieldCheck,
 } from 'lucide-react';
-import { valibotResolver } from 'mantine-form-valibot-resolver';
 import { useEffect, useId, useState } from 'react';
 import { toast } from 'sonner';
-import * as v from 'valibot';
 import PageHeader from '@/components/pageHeader';
 import ProxyCard from '@/components/proxyCard';
+import RegisterSourceForm from '@/components/registerSourceForm';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
-import {
-  FormItem,
-  FormLabel,
-  FormMessage,
-} from '@/components/ui/form';
-import { Input } from '@/components/ui/input';
 import { SelectField, SelectOption } from '@/components/ui/select';
 import getCredentials from '@/lib/getCredentials';
 import {
@@ -46,16 +37,7 @@ import {
   postLocalStorage,
 } from '@/lib/utilsClient';
 
-const schema = v.object({
-  hostname: v.pipe(
-    v.string(),
-    v.nonEmpty('Please enter a valid hostname before proceeding.'),
-  ),
-});
-
 export default function Page() {
-  const addTitleId = useId();
-  const hostnameId = useId();
   const inventoryTitleId = useId();
   const groupById = useId();
   const tagFilterId = useId();
@@ -239,12 +221,6 @@ export default function Page() {
     );
   };
 
-  const form = useForm({
-    validate: valibotResolver(schema),
-    initialValues: {
-      hostname: '',
-    },
-  });
   const activeCount = proxies.filter((proxy) => proxy.active).length;
   const inactiveCount = proxies.length - activeCount;
 
@@ -279,51 +255,15 @@ export default function Page() {
         }
       />
 
-      <section aria-labelledby={addTitleId}>
-        <Card>
-          <CardContent className='flex flex-col gap-5 p-5 md:flex-row md:items-center md:justify-between md:p-6'>
-            <div className='min-w-0 md:max-w-md'>
-              <div className='flex flex-col gap-1'>
-                <h2 id={addTitleId} className='text-lg font-semibold'>
-                  Add a proxy
-                </h2>
-                <p className='max-w-lg text-sm text-muted-foreground'>
-                  Register an appliance by hostname or IP. Its
-                  reachability will be checked automatically.
-                </p>
-              </div>
-            </div>
-
-            <form
-              onSubmit={form.onSubmit((values) => {
-                addProxy(values.hostname);
-              })}
-              className='flex w-full flex-col gap-3 sm:flex-row sm:items-start md:max-w-lg'
-            >
-              <FormItem className='min-w-0 flex-1'>
-                <FormLabel htmlFor={hostnameId}>
-                  Hostname or IP
-                </FormLabel>
-                <Input
-                  id={hostnameId}
-                  {...form.getInputProps('hostname')}
-                  placeholder='e.g. proxy02 or 192.0.2.10'
-                />
-                {form.errors.hostname && (
-                  <FormMessage>{form.errors.hostname}</FormMessage>
-                )}
-              </FormItem>
-              <Button
-                type='submit'
-                disabled={disable}
-                className='shrink-0 self-end'
-              >
-                Add proxy
-              </Button>
-            </form>
-          </CardContent>
-        </Card>
-      </section>
+      <RegisterSourceForm
+        title='Add a proxy'
+        description='Register an appliance by hostname or IP. Its reachability will be checked automatically.'
+        label='Hostname or IP'
+        placeholder='e.g. proxy02 or 192.0.2.10'
+        action='Add proxy'
+        disabled={disable}
+        onSubmit={addProxy}
+      />
 
       <section
         className='flex flex-col gap-4'

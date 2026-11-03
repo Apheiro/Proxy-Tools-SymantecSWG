@@ -9,7 +9,6 @@ import {
   ChevronDown,
   ChevronRight,
   CircleAlert,
-  CloudDownload,
   Download,
   FileCode2,
   Pencil,
@@ -23,6 +22,8 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
+import PacComparator from '@/components/pacComparator';
+import RegisterSourceForm from '@/components/registerSourceForm';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -246,9 +247,12 @@ export default function PacFileManagerWorkspace({
   const creatingSource = useRef(false);
   const [sources, setSources] = useState<PacSource[]>([]);
   const [loadedSources, setLoadedSources] = useState(false);
+  const [storageError, setStorageError] = useState('');
   const [selectedId, setSelectedId] = useState('');
   const [name, setName] = useState('');
-  const [url, setUrl] = useState('');
+  const [managerView, setManagerView] = useState<
+    'sources' | 'compare'
+  >('sources');
   const [loading, setLoading] = useState(false);
   const [testUrl, setTestUrl] = useState('');
   const [testInput, setTestInput] = useState('');
@@ -286,9 +290,21 @@ export default function PacFileManagerWorkspace({
   const [previewOpen, setPreviewOpen] = useState(false);
 
   useEffect(() => {
-    setSources(getLocalStorage<PacSource[]>(STORAGE_KEY) ?? []);
-    setSelectedId(localStorage.getItem('pac-selected-source') ?? '');
-    setLoadedSources(true);
+    try {
+      const stored = getLocalStorage<PacSource[]>(STORAGE_KEY) ?? [];
+      if (
+        !Array.isArray(stored) ||
+        stored.some((source) =>
+          !source || typeof source.id !== 'string' || !Array.isArray(source.rules),
+        )
+      )
+        throw new Error('Invalid PAC source inventory.');
+      setSources(stored);
+      setSelectedId(localStorage.getItem('pac-selected-source') ?? '');
+      setLoadedSources(true);
+    } catch (error) {
+      setStorageError(`Could not read PAC files from local storage: ${String(error)}`);
+    }
   }, []);
   useEffect(() => {
     if (!loadedSources || mode !== 'edit' || !editorSourceId) return;
@@ -316,7 +332,13 @@ export default function PacFileManagerWorkspace({
       router.replace(`/pac/editor?sourceId=${encodeURIComponent(id)}`);
   }, [loadedSources, mode, editorSourceId, router, sources]);
   useEffect(() => {
-    if (loadedSources) postLocalStorage(STORAGE_KEY, sources);
+    if (loadedSources) {
+      try {
+        postLocalStorage(STORAGE_KEY, sources);
+      } catch (error) {
+        setStorageError(`Could not save PAC files to local storage: ${String(error)}`);
+      }
+    }
   }, [sources, loadedSources]);
   useEffect(() => {
     if (selectedId)
@@ -397,6 +419,7 @@ export default function PacFileManagerWorkspace({
     const parsed = parsePac(content, proxies);
     const updated: PacSource = {
       ...source,
+      downloadedContent: content,
       remoteContent: parsed.error ? content : undefined,
       baseHash: digest,
       rules: parsed.rules,
@@ -425,6 +448,7 @@ export default function PacFileManagerWorkspace({
       const localChanges = isDirty(source);
       const sourceWithResponse: PacSource = {
         ...source,
+        downloadedContent: result.content,
         resolvedUrl: result.finalUrl,
         remoteEtag: result.etag,
         remoteLastModified: result.lastModified,
@@ -455,7 +479,7 @@ export default function PacFileManagerWorkspace({
     }
   };
 
-  const addSource = async () => {
+  const addSource = async (url: string) => {
     let parsedUrl: URL;
     try {
       parsedUrl = new URL(url.trim());
@@ -493,7 +517,6 @@ export default function PacFileManagerWorkspace({
     setSources((current) => [...current, source]);
     setSelectedId(source.id);
     setName('');
-    setUrl('');
     await synchronize(source);
     router.push(`/pac/editor?sourceId=${encodeURIComponent(source.id)}`);
   };
@@ -875,57 +898,71 @@ export default function PacFileManagerWorkspace({
   };
 
   return (
-    <div className={mode === 'manage' ? 'grid gap-6 lg:grid-cols-[300px_minmax(0,1fr)]' : 'flex min-w-0 flex-col gap-4'}>
+    <div className={`flex min-w-0 flex-col ${mode === 'manage' ? 'gap-6' : 'gap-4'}`}>
+      {storageError && (
+        <p role='alert' className='text-destructive'>{storageError}</p>
+      )}
       {mode === 'manage' && (
-      <aside className='flex flex-col gap-4'>
-        <Card>
-          <CardHeader>
-            <CardTitle className='flex items-center gap-2 text-base'>
-              <Plus className='size-4' />
-              Register PAC source
-            </CardTitle>
-          </CardHeader>
-          <CardContent className='flex flex-col gap-3'>
-            <Input
-              aria-label='Source name'
-              placeholder='Name (optional)'
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-            />
-            <Input
-              aria-label='WPAD or PAC URL'
-              placeholder='http://server.domain/wpad.dat'
-              value={url}
-              onChange={(event) => setUrl(event.target.value)}
-            />
-            <Button onClick={addSource} disabled={loading}>
-              <CloudDownload className='size-4' />
-              Add and load
-            </Button>
-            <div className='flex items-center gap-3 text-xs text-muted-foreground'>
-              <span className='h-px flex-1 bg-border' />
-              or
-              <span className='h-px flex-1 bg-border' />
-            </div>
+        <nav
+          aria-label='PAC File Manager tools'
+          className='flex flex-wrap gap-2'
+        >
+          <Button
+            variant={managerView === 'sources' ? 'default' : 'outline'}
+            onClick={() => setManagerView('sources')}
+          >
+            PAC sources
+          </Button>
+          <Button
+            variant={managerView === 'compare' ? 'default' : 'outline'}
+            onClick={() => setManagerView('compare')}
+          >
+            Comparador de WPAD
+          </Button>
+        </nav>
+      )}
+      {mode === 'manage' && managerView === 'sources' && (
+        <>
+          <RegisterSourceForm
+            title='Add a WPAD'
+            requiredMessage='Please enter a valid WPAD or PAC URL before proceeding.'
+            description='Register a WPAD/PAC source by URL. Its content will be downloaded automatically.'
+            label='WPAD or PAC URL'
+            placeholder='http://server.domain/wpad.dat'
+            action='Add and load'
+            disabled={loading || !loadedSources}
+            onSubmit={addSource}
+            extraField={
+              <div className='min-w-0 flex-1 space-y-2'>
+                <label htmlFor='pac-source-name' className='text-sm font-medium'>
+                  Source name
+                </label>
+                <Input
+                  id='pac-source-name'
+                  placeholder='Name (optional)'
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                />
+              </div>
+            }
+          />
+          <div className='flex flex-wrap items-center gap-3'>
             <Button
               variant='outline'
               onClick={createSourceFromScratch}
-              disabled={loading}
+              disabled={loading || !loadedSources}
             >
               <Plus className='size-4' />
               Create PAC from scratch
             </Button>
             <p className='text-xs text-muted-foreground'>
-              Import an existing source or create a local PAC with a
-              DIRECT fallback. Remote sources are read-only; export
-              changes as a file.
+              Remote sources are read-only; export changes as a file.
             </p>
-          </CardContent>
-        </Card>
-      </aside>
+          </div>
+        </>
       )}
 
-      {mode === 'manage' ? (
+      {mode === 'manage' ? (managerView === 'compare' ? <PacComparator sources={sources} /> : (
         <section className='flex min-w-0 flex-col gap-4'>
           <div className='flex items-center justify-between gap-3'>
             <div>
@@ -958,7 +995,7 @@ export default function PacFileManagerWorkspace({
             </div>
           )}
         </section>
-      ) : !selected ? (
+      )) : !selected ? (
         <Card className='flex min-h-80 items-center justify-center'>
           <div className='max-w-md px-6 text-center'>
             <FileCode2 className='mx-auto size-10 text-muted-foreground' />
