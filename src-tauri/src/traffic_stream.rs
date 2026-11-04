@@ -135,7 +135,9 @@ async fn send_request(
         .map_err(|error| {
             crate::describe_request_error("connecting to the access log", url, error)
         })?;
-    if response.status() == reqwest::StatusCode::UNAUTHORIZED { crate::proxy_transport::invalidate(url, username, password, use_mock_data); }
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        crate::proxy_transport::invalidate(url, username, password, use_mock_data);
+    }
     if !use_mock_data && response.url().path() == crate::management_login::LOGIN_PATH {
         crate::proxy_transport::invalidate(url, username, password, false);
         return Err("The proxy redirected access log retrieval to its login page. Retry to establish a new management session.".into());
@@ -159,7 +161,9 @@ pub async fn get_traffic_access_logs(
     }
     let base = base_url(&proxy_ip, use_mock_data)?;
     let url = index_url(&base, use_mock_data)?;
-    let client = crate::proxy_transport::authenticated_client_for(&url, &username, &password, use_mock_data).await?;
+    let client =
+        crate::proxy_transport::authenticated_client_for(&url, &username, &password, use_mock_data)
+            .await?;
     let mut response = send_request(&client, &url, &username, &password, use_mock_data).await?;
     let document_url = response.url().clone();
     // Only the index is finite. Bound it and ignore live-server scripts/footer.
@@ -353,20 +357,41 @@ async fn read_traffic_response(
     let url = response.url().clone();
     let mut text = StreamingLogText::default();
     let mut pending = None;
+    let mut buffered = String::new();
     let mut interval = tokio::time::interval(Duration::from_millis(500));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
-            _=token.cancelled()=>{if let Some(dataset)=pending.take(){publish(dataset);}return Ok(());},
-            _=interval.tick()=>if let Some(dataset)=pending.take(){publish(dataset);},
-            chunk=response.chunk()=>{
+            _ = token.cancelled() => {
+                // Retain received partial lines as exceptional records rather than silently dropping them.
+                buffered.push_str(&text.push(&[], true)?);
+                if !buffered.is_empty() {
+                    pending=Some(parse_received(Arc::clone(&sessions),id.clone(),std::mem::take(&mut buffered),true).await?);
+                }
+                if let Some(dataset)=pending.take(){publish(dataset);}
+                return Ok(());
+            },
+            _ = interval.tick() => {
+                if !buffered.is_empty() {
+                    pending=Some(parse_received(Arc::clone(&sessions),id.clone(),std::mem::take(&mut buffered),false).await?);
+                }
+                if let Some(dataset)=pending.take(){publish(dataset);}
+            },
+            chunk = response.chunk() => {
                 let chunk=chunk.map_err(|e|crate::describe_request_error("reading the access log stream",&url,e))?;
-                let finished=chunk.is_none();let decoded=text.push(chunk.as_deref().unwrap_or_default(),finished)?;
-                if !decoded.is_empty()||finished {
-                    let dataset=parse_received(Arc::clone(&sessions),id.clone(),decoded,finished).await?;
+                let finished=chunk.is_none();
+                buffered.push_str(&text.push(chunk.as_deref().unwrap_or_default(),finished)?);
+                if buffered.len()>=256*1024 || finished {
+                    let dataset=parse_received(Arc::clone(&sessions),id.clone(),std::mem::take(&mut buffered),finished).await?;
                     merge_pending(&mut pending,dataset);
                 }
-                if finished {if let Some(dataset)=pending.take(){if dataset.fields.is_empty(){return Err("The response contains no #Fields schema.".into());}publish(dataset);}return Ok(());}
+                if finished {
+                    if let Some(dataset)=pending.take(){
+                        if dataset.fields.is_empty(){return Err("The response contains no #Fields schema.".into());}
+                        publish(dataset);
+                    }
+                    return Ok(());
+                }
             }
         }
     }
@@ -394,7 +419,9 @@ pub async fn start_traffic_stream(
         &log_name,
         use_mock_data,
     )?;
-    let client = crate::proxy_transport::authenticated_client_for(&url, &username, &password, use_mock_data).await?;
+    let client =
+        crate::proxy_transport::authenticated_client_for(&url, &username, &password, use_mock_data)
+            .await?;
     let token = CancellationToken::new();
     let streams = Arc::clone(&state.0);
     let (capture_id, session) = create_capture_session(&app, url.to_string(), None)?;
@@ -474,4 +501,42 @@ pub async fn stop_traffic_stream(
         done.cancelled().await;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn transport_preserves_utf8_entities_headers_and_partial_final_line() {
+        let html="<html><pre>#Fields: cs-host cs-uri-path\nexample.test \"/á&amp;b\"\nother.test /tail</pre></html>";
+        let mut decoder = StreamingLogText::default();
+        let mut result = String::new();
+        for byte in html.as_bytes() {
+            result.push_str(&decoder.push(&[*byte], false).unwrap());
+        }
+        result.push_str(&decoder.push(&[], true).unwrap());
+        assert_eq!(
+            result,
+            "#Fields: cs-host cs-uri-path\nexample.test \"/á&b\"\nother.test /tail\n"
+        );
+        let dataset = crate::traffic_analysis::parse_access_log(result, "transport".into());
+        assert_eq!(dataset.records_processed, 2);
+        let mut c = crate::traffic_store_v3::tests::database();
+        crate::traffic_store_v3::ingest(&mut c, &dataset.records, &dataset.diagnostics).unwrap();
+        let detail = crate::traffic_store_v3::record(&c, 1).unwrap();
+        assert_eq!(
+            detail.raw_fields["cs-uri-path"].value.as_deref(),
+            Some("/á&b")
+        );
+    }
+    #[test]
+    fn stop_flush_preserves_received_partial_text_and_rejects_invalid_utf8() {
+        let mut decoder = StreamingLogText::default();
+        assert!(decoder
+            .push(b"#Fields: a b\nx", false)
+            .unwrap()
+            .ends_with('\n'));
+        assert_eq!(decoder.push(&[], true).unwrap(), "x\n");
+        assert!(StreamingLogText::default().push(&[0xff], true).is_err());
+    }
 }

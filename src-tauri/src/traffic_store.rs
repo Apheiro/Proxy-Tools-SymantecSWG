@@ -1,6 +1,7 @@
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use chrono::Utc;
@@ -12,7 +13,13 @@ use crate::traffic_analysis::{
     AccessLogDataset, AccessLogDiagnostic, AccessLogRecord, TrafficBucket,
 };
 
-const VERSION: i64 = 2;
+const VERSION: i64 = 3;
+fn is_v3(conn: &Connection) -> bool {
+    conn.query_row("SELECT value FROM meta WHERE key='version'", [], |r| {
+        r.get::<_, String>(0)
+    })
+    .is_ok_and(|v| v == "3")
+}
 pub(crate) fn directory(app: &AppHandle) -> Result<PathBuf, String> {
     let path = app
         .path()
@@ -60,6 +67,7 @@ fn meaningful(s: &str) -> bool {
 }
 
 /// Issue signals are explicit; a populated security field is not itself an error.
+/// These rules define v3 projection version 1; evolve the version instead of reclassifying history silently.
 pub(crate) fn issues(record: &AccessLogRecord) -> Vec<String> {
     let mut result = Vec::new();
     let status = value(record, "sc-status")
@@ -170,27 +178,22 @@ pub(crate) struct CaptureStore {
 impl CaptureStore {
     pub(crate) fn create(app: &AppHandle, id: String, source: &str) -> Result<Self, String> {
         let file = path(app, &id)?;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&file)
+            .map_err(|e| format!("Cannot create a new capture: {e}"))?;
         let connection = Connection::open(&file).map_err(|e| e.to_string())?;
         connection
             .busy_timeout(Duration::from_secs(10))
             .map_err(|e| e.to_string())?;
-        connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;
-          CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
-          CREATE TABLE records(id INTEGER PRIMARY KEY,ts INTEGER,bytes INTEGER NOT NULL,client TEXT,user TEXT,host TEXT,category TEXT,application TEXT,action TEXT,status TEXT,method TEXT,threat TEXT,search TEXT,issue_count INTEGER,denied INTEGER,record TEXT NOT NULL);
-          CREATE INDEX records_time ON records(ts,id);
-          CREATE INDEX records_issues_time ON records(ts,id) WHERE issue_count>0;
-          CREATE TABLE dimensions(record_id INTEGER,field TEXT,name TEXT,PRIMARY KEY(record_id,field,name));
-          CREATE INDEX dimensions_lookup ON dimensions(field,name,record_id);
-          CREATE TABLE counters(field TEXT,name TEXT,requests INTEGER,bytes INTEGER,PRIMARY KEY(field,name));
-          CREATE TABLE counter_fields(field TEXT PRIMARY KEY,unique_values INTEGER NOT NULL);
-          CREATE INDEX counters_requests ON counters(field,requests DESC,name);
-          CREATE INDEX counters_bytes ON counters(field,bytes DESC,name);
-          CREATE TABLE totals(id INTEGER PRIMARY KEY,requests INTEGER,bytes INTEGER,issues INTEGER,denied INTEGER,first INTEGER,last INTEGER,diagnostics INTEGER);
-          INSERT INTO totals VALUES(1,0,0,0,0,NULL,NULL,0);
-          CREATE TABLE timeline(epoch INTEGER PRIMARY KEY,requests INTEGER,bytes INTEGER);
-          CREATE TABLE diagnostics(id INTEGER PRIMARY KEY,diagnostic TEXT NOT NULL);") .map_err(|e| e.to_string())?;
+        connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);").map_err(|e| e.to_string())?;
+        crate::traffic_store_v3::create(&connection)?;
         for (key, val) in [
             ("version", VERSION.to_string()),
+            ("token_codec", "1".into()),
+            ("interpretation", "1".into()),
+            ("projection", "1".into()),
             ("source", source.to_owned()),
             ("saved", "0".into()),
             ("complete", "0".into()),
@@ -211,153 +214,11 @@ impl CaptureStore {
         records: &[AccessLogRecord],
         diagnostics: &[AccessLogDiagnostic],
     ) -> Result<(), String> {
-        let tx = self
-            .connection
-            .as_mut()
-            .ok_or("Capture is closed.")?
-            .transaction()
-            .map_err(|e| e.to_string())?;
-        let mut counters: HashMap<(String, String), (i64, i64)> = HashMap::new();
-        let mut timeline: BTreeMap<i64, (i64, i64)> = BTreeMap::new();
-        let (mut bytes_sum, mut issue_sum, mut denied_sum) = (0i64, 0i64, 0i64);
-        let (mut first, mut last): (Option<i64>, Option<i64>) = (None, None);
-        {
-            let mut insert = tx.prepare_cached("INSERT INTO records(ts,bytes,client,user,host,category,application,action,status,method,threat,search,issue_count,denied,record) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)").map_err(|e| e.to_string())?;
-            let mut dimension = tx
-                .prepare_cached("INSERT OR IGNORE INTO dimensions VALUES(?1,?2,?3)")
-                .map_err(|e| e.to_string())?;
-            for record in records {
-                let bytes = ["cs-bytes", "sc-bytes"]
-                    .iter()
-                    .filter_map(|name| value(record, name).parse::<i64>().ok())
-                    .filter(|n| *n >= 0)
-                    .sum::<i64>();
-                let ts = epoch(record);
-                let issue_list = issues(record);
-                let denied = i64::from(
-                    issue_list
-                        .iter()
-                        .any(|i| i == "Denied transaction" || i == "Policy denial"),
-                );
-                let host = value(record, "cs-host");
-                let threat = [
-                    "cs-threat-risk",
-                    "cs-threat-id",
-                    "rs-threat-id",
-                    "x-virus-id",
-                ]
-                .map(|name| value(record, name))
-                .join(" ");
-                let search = record
-                    .raw_fields
-                    .values()
-                    .filter_map(|v| v.value.as_deref())
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                let mut annotated = record.clone();
-                annotated.issues = issue_list.clone();
-                let issue_count = issue_list.len();
-                let json = serde_json::to_string(&annotated).map_err(|e| e.to_string())?;
-                insert
-                    .execute(params![
-                        ts,
-                        bytes,
-                        value(record, "c-ip"),
-                        value(record, "cs-username"),
-                        host,
-                        value(record, "cs-categories"),
-                        value(record, "x-bluecoat-application-name"),
-                        value(record, "s-action"),
-                        value(record, "sc-status"),
-                        value(record, "cs-method"),
-                        threat,
-                        search,
-                        issue_list.len() as i64,
-                        denied,
-                        json
-                    ])
-                    .map_err(|e| {
-                        format!("Could not persist traffic records (check free disk space): {e}")
-                    })?;
-                let id = tx.last_insert_rowid();
-                let mut dimensions = Vec::new();
-                for name in [
-                    "c-ip",
-                    "cs-username",
-                    "cs-host",
-                    "cs-categories",
-                    "x-bluecoat-application-name",
-                    "s-action",
-                    "sc-status",
-                    "cs-method",
-                    "sc-filter-result",
-                    "x-bluecoat-access-security-policy-action",
-                    "cs-threat-risk",
-                ] {
-                    let raw = if name == "cs-host" {
-                        host
-                    } else {
-                        value(record, name)
-                    };
-                    let names: HashSet<_> = if name == "cs-categories" {
-                        raw.split(';')
-                            .map(str::trim)
-                            .filter(|s| !s.is_empty())
-                            .collect()
-                    } else {
-                        std::iter::once(raw).filter(|s| !s.is_empty()).collect()
-                    };
-                    for val in names {
-                        dimensions.push((name.to_owned(), val.to_owned()));
-                    }
-                }
-                for issue in issue_list {
-                    dimensions.push(("x-issue".into(), issue));
-                }
-                for (field, name) in dimensions {
-                    dimension
-                        .execute(params![id, field, name])
-                        .map_err(|e| e.to_string())?;
-                    let count = counters.entry((field, name)).or_default();
-                    count.0 += 1;
-                    count.1 += bytes;
-                }
-                bytes_sum += bytes;
-                issue_sum += i64::from(issue_count > 0);
-                denied_sum += denied;
-                if let Some(ts) = ts {
-                    first = Some(first.map_or(ts, |n| n.min(ts)));
-                    last = Some(last.map_or(ts, |n| n.max(ts)));
-                    let counts = timeline.entry(ts.div_euclid(60000) * 60000).or_default();
-                    counts.0 += 1;
-                    counts.1 += bytes;
-                }
-            }
-        }
-        let mut distinct_updates: HashMap<String, i64> = HashMap::new();
-        for ((field, name), (requests, bytes)) in counters {
-            // Counts only increase, so returned requests == this batch count
-            // means this dimension was first inserted in this transaction.
-            let total: i64 = tx.query_row("INSERT INTO counters VALUES(?1,?2,?3,?4) ON CONFLICT(field,name) DO UPDATE SET requests=requests+excluded.requests,bytes=bytes+excluded.bytes RETURNING requests",params![field,name,requests,bytes],|r|r.get(0)).map_err(|e|e.to_string())?;
-            if total == requests {
-                *distinct_updates.entry(field).or_default() += 1;
-            }
-        }
-        for (field, count) in distinct_updates {
-            tx.execute("INSERT INTO counter_fields VALUES(?1,?2) ON CONFLICT(field) DO UPDATE SET unique_values=unique_values+excluded.unique_values",params![field,count]).map_err(|e|e.to_string())?;
-        }
-        for (epoch, (requests, bytes)) in timeline {
-            tx.execute("INSERT INTO timeline VALUES(?1,?2,?3) ON CONFLICT(epoch) DO UPDATE SET requests=requests+excluded.requests,bytes=bytes+excluded.bytes",params![epoch,requests,bytes]).map_err(|e| e.to_string())?;
-        }
-        tx.execute("UPDATE totals SET requests=requests+?1,bytes=bytes+?2,issues=issues+?3,denied=denied+?4,first=CASE WHEN first IS NULL THEN ?5 WHEN ?5 IS NULL THEN first ELSE MIN(first,?5) END,last=CASE WHEN last IS NULL THEN ?6 WHEN ?6 IS NULL THEN last ELSE MAX(last,?6) END,diagnostics=diagnostics+?7 WHERE id=1",params![records.len() as i64,bytes_sum,issue_sum,denied_sum,first,last,diagnostics.len() as i64]).map_err(|e| e.to_string())?;
-        for diagnostic in diagnostics {
-            tx.execute(
-                "INSERT INTO diagnostics(diagnostic) VALUES(?1)",
-                [serde_json::to_string(diagnostic).map_err(|e| e.to_string())?],
-            )
-            .map_err(|e| e.to_string())?;
-        }
-        tx.commit().map_err(|e| e.to_string())
+        crate::traffic_store_v3::ingest(
+            self.connection.as_mut().ok_or("Capture is closed.")?,
+            records,
+            diagnostics,
+        )
     }
     pub(crate) fn snapshot(&self, dataset: &AccessLogDataset) -> Result<(), String> {
         let mut metadata = dataset.clone();
@@ -397,7 +258,10 @@ impl Drop for CaptureStore {
 }
 
 fn open(app: &AppHandle, id: &str) -> Result<Connection, String> {
-    let conn = Connection::open_with_flags(path(app, id)?, OpenFlags::SQLITE_OPEN_READ_WRITE)
+    open_file(&path(app, id)?)
+}
+fn open_file(file: &std::path::Path) -> Result<Connection, String> {
+    let conn = Connection::open_with_flags(file, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|e| format!("Could not open traffic capture: {e}"))?;
     conn.busy_timeout(Duration::from_secs(10))
         .map_err(|e| e.to_string())?;
@@ -406,8 +270,18 @@ fn open(app: &AppHandle, id: &str) -> Result<Connection, String> {
             r.get::<_, String>(0).map(|v| v.parse().unwrap_or(0))
         })
         .map_err(|e| e.to_string())?;
-    if version != VERSION {
+    if version != 2 && version != VERSION {
         return Err("Unsupported indexed capture version.".into());
+    }
+    if version == 3 {
+        for key in ["token_codec", "interpretation", "projection"] {
+            let value: String = conn
+                .query_row("SELECT value FROM meta WHERE key=?", [key], |r| r.get(0))
+                .map_err(|e| e.to_string())?;
+            if value != "1" {
+                return Err(format!("Unsupported traffic {key} version: {value}"));
+            }
+        }
     }
     Ok(conn)
 }
@@ -423,7 +297,10 @@ pub(crate) fn dataset(app: &AppHandle, id: &str) -> Result<AccessLogDataset, Str
     Ok(dataset)
 }
 pub(crate) fn save(app: &AppHandle, id: &str) -> Result<String, String> {
-    let conn = open(app, id)?;
+    let checked = open(app, id)?;
+    drop(checked);
+    let conn = Connection::open_with_flags(path(app, id)?, OpenFlags::SQLITE_OPEN_READ_WRITE)
+        .map_err(|e| e.to_string())?;
     let complete: String = conn
         .query_row("SELECT value FROM meta WHERE key='complete'", [], |r| {
             r.get(0)
@@ -513,6 +390,8 @@ pub struct TrafficQuery {
     pub action: String,
     pub status: String,
     pub errors_only: bool,
+    pub compact_records: bool,
+    pub omit_records: bool,
     pub page: usize,
     pub page_size: usize,
     pub limit: usize,
@@ -577,7 +456,7 @@ pub struct TrafficQueryResult {
     options: HashMap<String, Vec<String>>,
 }
 
-fn conditions(query: &TrafficQuery) -> (String, Vec<rusqlite::types::Value>) {
+fn conditions(query: &TrafficQuery, v3: bool) -> (String, Vec<rusqlite::types::Value>) {
     let mut sql = Vec::new();
     let mut args = Vec::new();
     for (column, value) in [("ts >=", query.start), ("ts <=", query.end)] {
@@ -595,7 +474,17 @@ fn conditions(query: &TrafficQuery) -> (String, Vec<rusqlite::types::Value>) {
         ("category", &query.category),
     ] {
         if !value.is_empty() {
-            sql.push(format!("r.{column} LIKE ? ESCAPE '\\'"));
+            if v3 {
+                if column == "search" || column == "threat" {
+                    sql.push(format!("(SELECT {}(c.tokens,s.fields,c.exception) FROM canonical c JOIN schemas s ON s.id=c.schema_id WHERE c.id=r.id) LIKE ? ESCAPE '\\'",if column=="search" {"traffic_search"}else{"traffic_threat"}));
+                } else {
+                    sql.push(format!(
+                        "r.{column} IN (SELECT id FROM vals WHERE name LIKE ? ESCAPE '\\')"
+                    ));
+                }
+            } else {
+                sql.push(format!("r.{column} LIKE ? ESCAPE '\\'"));
+            }
             args.push(
                 format!(
                     "%{}%",
@@ -614,7 +503,11 @@ fn conditions(query: &TrafficQuery) -> (String, Vec<rusqlite::types::Value>) {
         ("status", &query.status),
     ] {
         if !value.is_empty() {
-            sql.push(format!("r.{column} = ?"));
+            sql.push(if v3 {
+                format!("r.{column} = (SELECT id FROM vals WHERE name=?)")
+            } else {
+                format!("r.{column} = ?")
+            });
             args.push(value.to_owned().into());
         }
     }
@@ -675,7 +568,14 @@ fn network_rankings(
             Vec::new(),
         )
     } else {
-        (format!("SELECT COALESCE(client,''),COUNT(*),COALESCE(SUM(bytes),0) AS traffic FROM records r WHERE {predicate} GROUP BY client ORDER BY {range_order} DESC,client"), args.to_vec())
+        (
+            if is_v3(conn) {
+                format!("SELECT v.name,g.requests,g.traffic FROM (SELECT client,COUNT(*) AS requests,COALESCE(SUM(bytes),0) AS traffic FROM records r WHERE {predicate} GROUP BY client) g JOIN vals v ON v.id=g.client ORDER BY {} DESC,v.name",if by_bytes {"g.traffic"}else{"g.requests"})
+            } else {
+                format!("SELECT COALESCE(client,''),COUNT(*),COALESCE(SUM(bytes),0) AS traffic FROM records r WHERE {predicate} GROUP BY client ORDER BY {range_order} DESC,client")
+            },
+            args.to_vec(),
+        )
     };
     let mut statement = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = statement
@@ -790,36 +690,368 @@ fn network_rankings(
 // No raw record pages are retained here; ingestion invalidates by persisted counts.
 static ANALYTICS_CACHE: OnceLock<Mutex<VecDeque<(String, TrafficQueryResult)>>> = OnceLock::new();
 
-fn query_capture(
-    app: &AppHandle,
-    id: &str,
+type Counts = HashMap<String, Vec<(String, i64, i64)>>;
+// Full unpaginated aggregates are reusable across ranking pages and metrics.
+// Admission is bounded by estimated owned bytes, not just an entry count.
+static LARGE_RANGES: OnceLock<Mutex<VecDeque<String>>> = OnceLock::new();
+static RANGE_CACHE: OnceLock<Mutex<VecDeque<(String, Arc<Counts>, usize)>>> = OnceLock::new();
+const RANGE_CACHE_BYTES: usize = 16 * 1024 * 1024;
+struct ScopeAnalytics {
+    summary: TrafficSummary,
+    timeline: Vec<TrafficBucket>,
+}
+static SCOPE_CACHE: OnceLock<Mutex<VecDeque<(String, Arc<ScopeAnalytics>, usize)>>> =
+    OnceLock::new();
+const SCOPE_CACHE_BYTES: usize = 4 * 1024 * 1024;
+fn cache_scope(
+    key: &str,
+    summary: TrafficSummary,
+    timeline: Vec<TrafficBucket>,
+) -> Result<(), String> {
+    let bytes = timeline.len() * std::mem::size_of::<TrafficBucket>() + 256;
+    if bytes <= SCOPE_CACHE_BYTES {
+        let mut entries = SCOPE_CACHE
+            .get_or_init(|| Mutex::new(VecDeque::new()))
+            .lock()
+            .map_err(|e| e.to_string())?;
+        entries.retain(|(k, _, _)| k != key);
+        while entries.iter().map(|(_, _, b)| b).sum::<usize>() + bytes > SCOPE_CACHE_BYTES
+            || entries.len() >= 4
+        {
+            entries.pop_back();
+        }
+        entries.push_front((
+            key.into(),
+            Arc::new(ScopeAnalytics { summary, timeline }),
+            bytes,
+        ));
+    }
+    Ok(())
+}
+fn v3_counts_sql(predicate: &str) -> String {
+    let mut groups = Vec::new();
+    for (field, column) in crate::traffic_store_v3::FIELDS {
+        groups.push(format!("SELECT '{field}' AS field,{column} AS value_id,COUNT(*) AS requests,SUM(bytes) AS bytes FROM selected WHERE {column}<>0 GROUP BY {column}"));
+    }
+    groups.push("SELECT CASE m.field WHEN 0 THEN 'cs-categories' ELSE 'x-issue' END,m.value_id,COUNT(*),SUM(r.bytes) FROM selected r JOIN memberships m ON m.record_id=r.id GROUP BY m.field,m.value_id".into());
+    format!("WITH selected AS MATERIALIZED (SELECT r.* FROM records r WHERE {predicate}), grouped AS ({}) SELECT g.field,v.name,g.requests,g.bytes FROM grouped g JOIN vals v ON v.id=g.value_id",groups.join(" UNION ALL "))
+}
+fn range_counts(
+    conn: &Connection,
+    predicate: &str,
+    args: &[rusqlite::types::Value],
+    key: &str,
+) -> Result<Option<Arc<Counts>>, String> {
+    let profile = std::env::var_os("TRAFFIC_QUERY_PROFILE").is_some();
+    let large = LARGE_RANGES.get_or_init(|| Mutex::new(VecDeque::new()));
+    if large
+        .lock()
+        .map_err(|e| e.to_string())?
+        .iter()
+        .any(|k| k == key)
+    {
+        if profile {
+            eprintln!("traffic_profile range_cache=known_oversize");
+        }
+        return Ok(None);
+    }
+    let cache = RANGE_CACHE.get_or_init(|| Mutex::new(VecDeque::new()));
+    if let Some((_, rows, _)) = cache
+        .lock()
+        .map_err(|e| e.to_string())?
+        .iter()
+        .find(|(k, _, _)| k == key)
+    {
+        if std::env::var_os("TRAFFIC_QUERY_PROFILE").is_some() {
+            eprintln!("traffic_profile range_cache=hit");
+        }
+        return Ok(Some(Arc::clone(rows)));
+    }
+    // Aggregate integer facts in one pass, rather than sorting the selected rows ten times.
+    let columns = crate::traffic_store_v3::FIELDS
+        .iter()
+        .map(|(_, column)| format!("r.{column}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let mut summary = TrafficSummary::default();
+    let mut minute_counts: BTreeMap<i64, (usize, u64)> = BTreeMap::new();
+    let mut numeric: HashMap<(usize, i64), (i64, i64)> = HashMap::new();
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT r.bytes,{columns},r.ts,r.issue_count,r.denied FROM records r WHERE {predicate}"
+        ))
+        .map_err(|e| e.to_string())?;
+    let mut rows = stmt
+        .query(params_from_iter(args.iter()))
+        .map_err(|e| e.to_string())?;
+    while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+        let traffic: i64 = row.get(0).map_err(|e| e.to_string())?;
+        summary.requests += 1;
+        summary.bytes = summary
+            .bytes
+            .checked_add(traffic)
+            .ok_or("Traffic byte total overflow")?;
+        summary.issues += i64::from(row.get::<_, i64>(12).map_err(|e| e.to_string())? > 0);
+        summary.denied += row.get::<_, i64>(13).map_err(|e| e.to_string())?;
+        if let Some(ts) = row.get::<_, Option<i64>>(11).map_err(|e| e.to_string())? {
+            summary.first = Some(summary.first.map_or(ts, |n| n.min(ts)));
+            summary.last = Some(summary.last.map_or(ts, |n| n.max(ts)));
+            let counts = minute_counts
+                .entry(ts.div_euclid(60000) * 60000)
+                .or_default();
+            counts.0 += 1;
+            counts.1 += traffic as u64;
+        }
+
+        for index in 0..crate::traffic_store_v3::FIELDS.len() {
+            let id: i64 = row.get(index + 1).map_err(|e| e.to_string())?;
+            if id != 0 {
+                let counts = numeric.entry((index, id)).or_default();
+                counts.0 += 1;
+                counts.1 += traffic;
+            }
+        }
+        if numeric.len() * 128 > RANGE_CACHE_BYTES {
+            break;
+        }
+    }
+    drop(rows);
+    if numeric.len() * 128 <= RANGE_CACHE_BYTES {
+        summary.unique_clients = numeric.keys().filter(|(field, _)| *field == 0).count() as i64;
+        summary.unique_users = numeric.keys().filter(|(field, _)| *field == 1).count() as i64;
+        summary.unique_destinations =
+            numeric.keys().filter(|(field, _)| *field == 2).count() as i64;
+        let timeline = minute_counts
+            .into_iter()
+            .map(|(epoch, (requests, bytes))| TrafficBucket {
+                epoch,
+                requests,
+                bytes,
+            })
+            .collect();
+        cache_scope(key, summary, timeline)?;
+        let mut stmt=conn.prepare(&format!("SELECT m.field,m.value_id,r.bytes FROM records r CROSS JOIN memberships m ON m.record_id=r.id WHERE {predicate}")).map_err(|e|e.to_string())?;
+        let mut rows = stmt
+            .query(params_from_iter(args.iter()))
+            .map_err(|e| e.to_string())?;
+        while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+            let field: u8 = row.get(0).map_err(|e| e.to_string())?;
+            let id: i64 = row.get(1).map_err(|e| e.to_string())?;
+            let traffic: i64 = row.get(2).map_err(|e| e.to_string())?;
+            let counts = numeric.entry((10 + usize::from(field), id)).or_default();
+            counts.0 += 1;
+            counts.1 += traffic;
+            if numeric.len() * 128 > RANGE_CACHE_BYTES {
+                break;
+            }
+        }
+    }
+    if numeric.len() * 128 > RANGE_CACHE_BYTES {
+        if profile {
+            eprintln!(
+                "traffic_profile range_cache=rejected groups={} budget={RANGE_CACHE_BYTES}",
+                numeric.len()
+            );
+        }
+        let mut entries = large.lock().map_err(|e| e.to_string())?;
+        entries.push_front(key.into());
+        while entries.len() > 16 {
+            entries.pop_back();
+        }
+        return Ok(None);
+    }
+    let ids: std::collections::HashSet<i64> = numeric.keys().map(|(_, id)| *id).collect();
+    let ids = serde_json::to_string(&ids).map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT id,name FROM vals WHERE id IN (SELECT value FROM json_each(?))")
+        .map_err(|e| e.to_string())?;
+    let names: HashMap<i64, String> = stmt
+        .query_map([ids], |r| Ok((r.get(0)?, r.get(1)?)))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<_, _>>()
+        .map_err(|e| e.to_string())?;
+    let mut grouped: Counts = HashMap::new();
+    let mut bytes = 0;
+    for ((field, id), (requests, traffic)) in numeric {
+        let field = if field < 10 {
+            crate::traffic_store_v3::FIELDS[field].0
+        } else if field == 10 {
+            "cs-categories"
+        } else {
+            "x-issue"
+        };
+        let name = names
+            .get(&id)
+            .ok_or("Missing traffic dimension value")?
+            .clone();
+        bytes += name.len() + 128;
+        grouped
+            .entry(field.into())
+            .or_default()
+            .push((name, requests, traffic));
+    }
+    if bytes > RANGE_CACHE_BYTES {
+        return Ok(Some(Arc::new(grouped)));
+    } // Return correctly, but don't retain an oversize entry.
+    if profile {
+        eprintln!(
+            "traffic_profile range_cache=admitted estimated_bytes={bytes} groups={}",
+            grouped.values().map(Vec::len).sum::<usize>()
+        );
+    }
+    let grouped = Arc::new(grouped);
+    let mut entries = cache.lock().map_err(|e| e.to_string())?;
+    entries.retain(|(k, _, _)| k != key);
+    while entries.iter().map(|(_, _, b)| b).sum::<usize>() + bytes > RANGE_CACHE_BYTES
+        || entries.len() >= 4
+    {
+        entries.pop_back();
+    }
+    entries.push_front((key.into(), Arc::clone(&grouped), bytes));
+    Ok(Some(grouped))
+}
+
+static SEARCH_CACHE: OnceLock<Mutex<VecDeque<(String, Arc<Vec<i64>>, usize)>>> = OnceLock::new();
+const SEARCH_CACHE_BYTES: usize = 4 * 1024 * 1024;
+fn prepare_matches(
+    conn: &Connection,
+    predicate: &str,
+    args: &[rusqlite::types::Value],
+    key: &str,
+) -> Result<(), String> {
+    let cache = SEARCH_CACHE.get_or_init(|| Mutex::new(VecDeque::new()));
+    let cached = cache
+        .lock()
+        .map_err(|e| e.to_string())?
+        .iter()
+        .find(|(k, _, _)| k == key)
+        .map(|(_, ids, _)| Arc::clone(ids));
+    conn.execute_batch("DROP TABLE IF EXISTS temp.traffic_matches;CREATE TEMP TABLE traffic_matches(id INTEGER PRIMARY KEY)").map_err(|e|e.to_string())?;
+    if let Some(ids) = cached {
+        conn.execute(
+            "INSERT INTO traffic_matches SELECT value FROM json_each(?)",
+            [serde_json::to_string(&*ids).map_err(|e| e.to_string())?],
+        )
+        .map_err(|e| e.to_string())?;
+        if std::env::var_os("TRAFFIC_QUERY_PROFILE").is_some() {
+            eprintln!("traffic_profile search_ids_cache=hit rows={}", ids.len());
+        }
+    } else {
+        conn.execute(
+            &format!("INSERT INTO traffic_matches SELECT r.id FROM records r WHERE {predicate}"),
+            params_from_iter(args.iter()),
+        )
+        .map_err(|e| e.to_string())?;
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM traffic_matches", [], |r| r.get(0))
+            .map_err(|e| e.to_string())?;
+        let bytes = count as usize * 16 + 128;
+        if bytes <= SEARCH_CACHE_BYTES {
+            let mut stmt = conn
+                .prepare("SELECT id FROM traffic_matches ORDER BY id")
+                .map_err(|e| e.to_string())?;
+            let ids = stmt
+                .query_map([], |r| r.get::<_, i64>(0))
+                .map_err(|e| e.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?;
+            let mut entries = cache.lock().map_err(|e| e.to_string())?;
+            entries.retain(|(k, _, _)| k != key);
+            while entries.iter().map(|(_, _, b)| b).sum::<usize>() + bytes > SEARCH_CACHE_BYTES
+                || entries.len() >= 4
+            {
+                entries.pop_back();
+            }
+            entries.push_front((key.into(), Arc::new(ids), bytes));
+        }
+    }
+    Ok(())
+}
+fn filter_options(conn: &Connection) -> Result<HashMap<String, Vec<String>>, String> {
+    let mut options: HashMap<String, Vec<String>> = HashMap::new();
+    let mut stmt=conn.prepare("SELECT field,name FROM counters WHERE field IN ('cs-categories','s-action','sc-status','cs-method') ORDER BY name").map_err(|e|e.to_string())?;
+    for row in stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        .map_err(|e| e.to_string())?
+    {
+        let (field, name) = row.map_err(|e| e.to_string())?;
+        options.entry(field).or_default().push(name);
+    }
+    Ok(options)
+}
+fn query_connection(
+    conn: &Connection,
+    cache_identity: &str,
     query: TrafficQuery,
 ) -> Result<TrafficQueryResult, String> {
+    let profile = std::env::var_os("TRAFFIC_QUERY_PROFILE").is_some();
+    let started = std::time::Instant::now();
     if query.start.zip(query.end).is_some_and(|(a, b)| a > b) {
         return Err("The range start must not be after its end.".into());
     }
-    let conn = open(app, id)?;
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-    let (predicate, args) = conditions(&query);
+    let v3 = is_v3(&tx);
+    if v3 && (!query.search.is_empty() || !query.threat.is_empty()) {
+        crate::traffic_store_v3::register_search(&tx)?;
+    }
+    let (mut predicate, mut args) = conditions(&query, v3);
     let global = predicate == "1=1";
     let revision: (i64, i64) = tx
         .query_row("SELECT requests,diagnostics FROM totals", [], |r| {
             Ok((r.get(0)?, r.get(1)?))
         })
         .map_err(|e| e.to_string())?;
+    let revision = if query.start.is_some() || query.end.is_some() {
+        let first = query
+            .start
+            .map(|n| n.div_euclid(60000) * 60000)
+            .unwrap_or(i64::MIN);
+        let last = query
+            .end
+            .map(|n| n.div_euclid(60000) * 60000)
+            .unwrap_or(i64::MAX);
+        let requests = tx
+            .query_row(
+                "SELECT COALESCE(SUM(requests),0) FROM timeline WHERE epoch>=? AND epoch<=?",
+                params![first, last],
+                |r| r.get::<_, i64>(0),
+            )
+            .map_err(|e| e.to_string())?;
+        (requests, revision.1)
+    } else {
+        revision
+    };
     let mut selection = serde_json::to_value(&query).map_err(|e| e.to_string())?;
     if let Some(object) = selection.as_object_mut() {
-        for key in ["page", "pageSize", "errorsOnly"] {
+        for key in [
+            "page",
+            "pageSize",
+            "errorsOnly",
+            "compactRecords",
+            "omitRecords",
+        ] {
             object.remove(key);
         }
     }
     let cache_key = format!(
         "{}:{}:{}:{}",
-        path(app, id)?.display(),
-        revision.0,
-        revision.1,
-        selection
+        cache_identity, revision.0, revision.1, selection
     );
+    let mut range_selection = selection.clone();
+    if let Some(object) = range_selection.as_object_mut() {
+        for key in [
+            "rankingPages",
+            "metric",
+            "limit",
+            "networkPrefix",
+            "network",
+            "networkPage",
+            "networkListPage",
+        ] {
+            object.remove(key);
+        }
+    }
+    let range_key = format!("{cache_identity}:{}:{range_selection}", revision.0);
     let cache = ANALYTICS_CACHE.get_or_init(|| Mutex::new(VecDeque::new()));
     if !global {
         let cached = cache
@@ -828,17 +1060,66 @@ fn query_capture(
             .iter()
             .find(|(key, _)| key == &cache_key)
             .map(|(_, result)| result.clone());
-        if let Some(result) = cached {
+        if let Some(mut result) = cached {
+            result.options = filter_options(&tx)?;
+            if v3 && !query.omit_records && (!query.search.is_empty() || !query.threat.is_empty()) {
+                prepare_matches(&tx, &predicate, &args, &range_key)?;
+                predicate = "r.id IN (SELECT id FROM traffic_matches)".into();
+                args.clear();
+            }
             return page_result(&tx, &query, &predicate, &args, result);
         }
     }
+    let scope_cache = SCOPE_CACHE.get_or_init(|| Mutex::new(VecDeque::new()));
+    let mut scope = scope_cache
+        .lock()
+        .map_err(|e| e.to_string())?
+        .iter()
+        .find(|(key, _, _)| key == &range_key)
+        .map(|(_, value, _)| Arc::clone(value));
+    if v3 && (!query.search.is_empty() || !query.threat.is_empty()) {
+        let t = std::time::Instant::now();
+        prepare_matches(&tx, &predicate, &args, &range_key)?;
+        predicate = "r.id IN (SELECT id FROM traffic_matches)".into();
+        args.clear();
+        if profile {
+            eprintln!(
+                "traffic_profile search_selection_ms={}",
+                t.elapsed().as_millis()
+            );
+        }
+    }
+    let precounted = if v3 && !global {
+        let t = std::time::Instant::now();
+        let counts = range_counts(&tx, &predicate, &args, &range_key)?;
+        if profile {
+            eprintln!(
+                "traffic_profile selection_aggregate_ms={}",
+                t.elapsed().as_millis()
+            );
+        }
+        if scope.is_none() {
+            scope = scope_cache
+                .lock()
+                .map_err(|e| e.to_string())?
+                .iter()
+                .find(|(key, _, _)| key == &range_key)
+                .map(|(_, value, _)| Arc::clone(value));
+        }
+        counts
+    } else {
+        None
+    };
+    let summary_started = std::time::Instant::now();
     let summary_sql = if global {
         "SELECT requests,bytes,issues,denied,first,last,COALESCE((SELECT unique_values FROM counter_fields WHERE field='cs-username'),0),COALESCE((SELECT unique_values FROM counter_fields WHERE field='c-ip'),0),COALESCE((SELECT unique_values FROM counter_fields WHERE field='cs-host'),0) FROM totals".into()
     } else {
-        format!("SELECT COUNT(*),COALESCE(SUM(bytes),0),COALESCE(SUM(issue_count>0),0),COALESCE(SUM(denied),0),MIN(ts),MAX(ts),COUNT(DISTINCT NULLIF(user,'')),COUNT(DISTINCT NULLIF(client,'')),COUNT(DISTINCT NULLIF(host,'')) FROM records r WHERE {predicate}")
+        format!("SELECT COUNT(*),COALESCE(SUM(bytes),0),COALESCE(SUM(issue_count>0),0),COALESCE(SUM(denied),0),MIN(ts),MAX(ts),COUNT(DISTINCT NULLIF(user,{empty})),COUNT(DISTINCT NULLIF(client,{empty})),COUNT(DISTINCT NULLIF(host,{empty})) FROM records r WHERE {predicate}", empty=if v3 {"0"}else{"''"})
     };
-    let mut summary = tx
-        .query_row(&summary_sql, params_from_iter(args.iter()), |r| {
+    let mut summary = if let Some(scope) = &scope {
+        scope.summary.clone()
+    } else {
+        tx.query_row(&summary_sql, params_from_iter(args.iter()), |r| {
             Ok(TrafficSummary {
                 requests: r.get(0)?,
                 bytes: r.get(1)?,
@@ -852,62 +1133,115 @@ fn query_capture(
                 ..TrafficSummary::default()
             })
         })
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?
+    };
+    if profile {
+        eprintln!(
+            "traffic_profile summary_ms={}",
+            summary_started.elapsed().as_millis()
+        );
+    }
+    let ranking_started = std::time::Instant::now();
     let duration = match (summary.first, summary.last) {
-        (Some(first), Some(last)) => {
-            ((query.end.unwrap_or(last) - query.start.unwrap_or(first)) as f64 / 1000.).max(1.)
-        }
+        (Some(first), Some(last)) => (query
+            .end
+            .unwrap_or(last)
+            .saturating_sub(query.start.unwrap_or(first))
+            as f64
+            / 1000.)
+            .max(1.),
         _ => 1.,
     };
     summary.requests_per_second = summary.requests as f64 / duration;
     summary.bytes_per_second = summary.bytes as f64 / duration;
     let mut rankings: HashMap<String, Vec<Ranking>> = HashMap::new();
     let mut ranking_counts: HashMap<String, usize> = HashMap::new();
-    let mut options: HashMap<String, Vec<String>> = HashMap::new();
     let mut range_rankings: HashMap<String, Vec<(String, i64, i64)>> = HashMap::new();
     let top = query.limit.clamp(1, 50) as i64;
     if !global {
-        // Materialize the timestamp/filter selection once. The dimension primary
-        // key starts with record_id, so every selected row joins its memberships.
-        let order = if query.metric == "bytes" {
-            "CASE WHEN field='x-issue' THEN requests ELSE bytes END"
+        let grouped = precounted;
+        if let Some(grouped) = grouped {
+            for (field, counts) in grouped.iter() {
+                let mut rows = counts.iter().collect::<Vec<_>>();
+                rows.sort_by(|a, b| {
+                    let av = if query.metric == "bytes" && field != "x-issue" {
+                        a.2
+                    } else {
+                        a.1
+                    };
+                    let bv = if query.metric == "bytes" && field != "x-issue" {
+                        b.2
+                    } else {
+                        b.1
+                    };
+                    bv.cmp(&av).then_with(|| a.0.cmp(&b.0))
+                });
+                let page = query
+                    .ranking_pages
+                    .get(field)
+                    .copied()
+                    .unwrap_or(1)
+                    .max(1)
+                    .min(rows.len().div_ceil(top as usize).max(1));
+                ranking_counts.insert(field.clone(), rows.len());
+                range_rankings.insert(
+                    field.clone(),
+                    rows.into_iter()
+                        .skip((page - 1) * top as usize)
+                        .take(top as usize)
+                        .cloned()
+                        .collect(),
+                );
+            }
         } else {
-            "requests"
-        };
-        let sql = format!("WITH selected AS MATERIALIZED (SELECT r.id,r.bytes FROM records r WHERE {predicate}), counts AS (SELECT d.field,d.name,COUNT(*) AS requests,COALESCE(SUM(r.bytes),0) AS bytes FROM selected r JOIN dimensions d ON d.record_id=r.id GROUP BY d.field,d.name), ordered AS (SELECT *,ROW_NUMBER() OVER (PARTITION BY field ORDER BY {order} DESC,name) AS position,COUNT(*) OVER (PARTITION BY field) AS total FROM counts), paged AS (SELECT ordered.*,MAX(1,MIN(COALESCE(p.value,1),(total+?-1)/?)) AS page FROM ordered LEFT JOIN json_each(?) p ON p.key=ordered.field) SELECT field,name,requests,bytes,total FROM paged WHERE position>(page-1)*? AND position<=page*? ORDER BY field,position");
-        let mut parameters = args.clone();
-        parameters.push(top.into());
-        parameters.push(top.into());
-        parameters.push(
-            serde_json::to_string(&query.ranking_pages)
+            // Materialize the timestamp/filter selection once. The dimension primary
+            // key starts with record_id, so every selected row joins its memberships.
+            let order = if query.metric == "bytes" {
+                "CASE WHEN field='x-issue' THEN requests ELSE bytes END"
+            } else {
+                "requests"
+            };
+            let legacy_sql = format!("WITH selected AS MATERIALIZED (SELECT r.id,r.bytes FROM records r WHERE {predicate}), counts AS (SELECT d.field,d.name,COUNT(*) AS requests,COALESCE(SUM(r.bytes),0) AS bytes FROM selected r JOIN dimensions d ON d.record_id=r.id GROUP BY d.field,d.name), ordered AS (SELECT *,ROW_NUMBER() OVER (PARTITION BY field ORDER BY {order} DESC,name) AS position,COUNT(*) OVER (PARTITION BY field) AS total FROM counts), paged AS (SELECT ordered.*,MAX(1,MIN(COALESCE(p.value,1),(total+?-1)/?)) AS page FROM ordered LEFT JOIN json_each(?) p ON p.key=ordered.field) SELECT field,name,requests,bytes,total FROM paged WHERE position>(page-1)*? AND position<=page*? ORDER BY field,position");
+            let sql = if v3 {
+                format!("WITH counts AS ({}), ordered AS (SELECT *,ROW_NUMBER() OVER (PARTITION BY field ORDER BY {order} DESC,name) AS position,COUNT(*) OVER (PARTITION BY field) AS total FROM counts), paged AS (SELECT ordered.*,MAX(1,MIN(COALESCE(p.value,1),(total+?-1)/?)) AS page FROM ordered LEFT JOIN json_each(?) p ON p.key=ordered.field) SELECT field,name,requests,bytes,total FROM paged WHERE position>(page-1)*? AND position<=page*? ORDER BY field,position",v3_counts_sql(&predicate))
+            } else {
+                legacy_sql
+            };
+            let mut parameters = args.clone();
+            parameters.push(top.into());
+            parameters.push(top.into());
+            parameters.push(
+                serde_json::to_string(&query.ranking_pages)
+                    .map_err(|e| e.to_string())?
+                    .into(),
+            );
+            parameters.push(top.into());
+            parameters.push(top.into());
+            let mut statement = tx.prepare(&sql).map_err(|e| e.to_string())?;
+            for row in statement
+                .query_map(params_from_iter(parameters.iter()), |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, i64>(2)?,
+                        r.get::<_, i64>(3)?,
+                        r.get::<_, i64>(4)?,
+                    ))
+                })
                 .map_err(|e| e.to_string())?
-                .into(),
-        );
-        parameters.push(top.into());
-        parameters.push(top.into());
-        let mut statement = tx.prepare(&sql).map_err(|e| e.to_string())?;
-        for row in statement
-            .query_map(params_from_iter(parameters.iter()), |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, i64>(2)?,
-                    r.get::<_, i64>(3)?,
-                    r.get::<_, i64>(4)?,
-                ))
-            })
-            .map_err(|e| e.to_string())?
-        {
-            let (field, name, requests, bytes, total) = row.map_err(|e| e.to_string())?;
-            let total = usize::try_from(total)
-                .map_err(|e| format!("Invalid ranking count for {field}: {total} ({e})"))?;
-            ranking_counts.insert(field.clone(), total);
-            range_rankings
-                .entry(field)
-                .or_default()
-                .push((name, requests, bytes));
+            {
+                let (field, name, requests, bytes, total) = row.map_err(|e| e.to_string())?;
+                let total = usize::try_from(total)
+                    .map_err(|e| format!("Invalid ranking count for {field}: {total} ({e})"))?;
+                ranking_counts.insert(field.clone(), total);
+                range_rankings
+                    .entry(field)
+                    .or_default()
+                    .push((name, requests, bytes));
+            }
         }
     }
+
     for field in [
         "c-ip",
         "cs-username",
@@ -982,22 +1316,31 @@ fn query_capture(
         }
         rankings.insert(field.to_owned(), items);
     }
-    let mut statement=tx.prepare("SELECT field,name FROM counters WHERE field IN ('cs-categories','s-action','sc-status','cs-method') ORDER BY name").map_err(|e|e.to_string())?;
-    for row in statement
-        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
-        .map_err(|e| e.to_string())?
-    {
-        let (field, name) = row.map_err(|e| e.to_string())?;
-        options.entry(field).or_default().push(name);
+    if profile {
+        eprintln!(
+            "traffic_profile rankings_ms={}",
+            ranking_started.elapsed().as_millis()
+        );
     }
+    let tail_started = std::time::Instant::now();
+    let options = filter_options(&tx)?;
     let sql = if global {
         "SELECT epoch,requests,bytes FROM timeline ORDER BY epoch".into()
     } else {
-        format!("SELECT (ts/60000)*60000,COUNT(*),COALESCE(SUM(bytes),0) FROM records r WHERE {predicate} AND ts IS NOT NULL GROUP BY (ts/60000) ORDER BY 1")
+        {
+            let bucket = if v3 {
+                "((ts/60000)-(ts<0 AND ts%60000<>0))*60000"
+            } else {
+                "(ts/60000)*60000"
+            };
+            format!("SELECT {bucket},COUNT(*),COALESCE(SUM(bytes),0) FROM records r WHERE {predicate} AND ts IS NOT NULL GROUP BY {bucket} ORDER BY 1")
+        }
     };
     let mut stmt = tx.prepare(&sql).map_err(|e| e.to_string())?;
-    let timeline = stmt
-        .query_map(params_from_iter(args.iter()), |r| {
+    let timeline = if let Some(scope) = &scope {
+        scope.timeline.clone()
+    } else {
+        stmt.query_map(params_from_iter(args.iter()), |r| {
             Ok(TrafficBucket {
                 epoch: r.get(0)?,
                 requests: r.get::<_, i64>(1)? as usize,
@@ -1006,7 +1349,11 @@ fn query_capture(
         })
         .map_err(|e| e.to_string())?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?
+    };
+    if !global && scope.is_none() {
+        cache_scope(&range_key, summary.clone(), timeline.clone())?;
+    }
     let diagnostics_total = tx
         .query_row("SELECT diagnostics FROM totals", [], |r| r.get(0))
         .map_err(|e| e.to_string())?;
@@ -1060,17 +1407,106 @@ fn query_capture(
             entries.pop_back();
         }
     }
+    if profile {
+        eprintln!(
+            "traffic_profile tail_ms={} total_ms={}",
+            tail_started.elapsed().as_millis(),
+            started.elapsed().as_millis()
+        );
+    }
     page_result(&tx, &query, &predicate, &args, result)
+}
+struct QueryRun {
+    cancelled: AtomicBool,
+    interrupt: Mutex<Option<rusqlite::InterruptHandle>>,
+}
+static QUERY_RUNS: OnceLock<Mutex<HashMap<String, Arc<QueryRun>>>> = OnceLock::new();
+static CANCELLED_QUERIES: OnceLock<Mutex<VecDeque<String>>> = OnceLock::new();
+struct QueryGuard {
+    id: String,
+    run: Arc<QueryRun>,
+}
+impl Drop for QueryGuard {
+    fn drop(&mut self) {
+        if let Ok(mut runs) = QUERY_RUNS.get_or_init(|| Mutex::new(HashMap::new())).lock() {
+            if runs
+                .get(&self.id)
+                .is_some_and(|run| Arc::ptr_eq(run, &self.run))
+            {
+                runs.remove(&self.id);
+            }
+        }
+    }
+}
+#[tauri::command]
+pub fn cancel_traffic_query(request_id: String) -> Result<(), String> {
+    let mut cancelled = CANCELLED_QUERIES
+        .get_or_init(|| Mutex::new(VecDeque::new()))
+        .lock()
+        .map_err(|e| e.to_string())?;
+    cancelled.push_back(request_id.clone());
+    while cancelled.len() > 128 {
+        cancelled.pop_front();
+    }
+    if let Some(run) = QUERY_RUNS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .map_err(|e| e.to_string())?
+        .get(&request_id)
+    {
+        run.cancelled.store(true, Ordering::Relaxed);
+        if let Some(handle) = run.interrupt.lock().map_err(|e| e.to_string())?.as_ref() {
+            handle.interrupt();
+        }
+    }
+    Ok(())
 }
 #[tauri::command]
 pub async fn query_traffic_capture(
     app: AppHandle,
     capture_id: String,
     query: TrafficQuery,
+    request_id: Option<String>,
 ) -> Result<TrafficQueryResult, String> {
-    tokio::task::spawn_blocking(move || query_capture(&app, &capture_id, query))
-        .await
-        .map_err(|e| e.to_string())?
+    let guard = if let Some(id) = request_id {
+        let cancelled = CANCELLED_QUERIES
+            .get_or_init(|| Mutex::new(VecDeque::new()))
+            .lock()
+            .map_err(|e| e.to_string())?;
+        if cancelled.contains(&id) {
+            return Err("Traffic query cancelled".into());
+        }
+        let run = Arc::new(QueryRun {
+            cancelled: AtomicBool::new(false),
+            interrupt: Mutex::new(None),
+        });
+        QUERY_RUNS
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .map_err(|e| e.to_string())?
+            .insert(id.clone(), Arc::clone(&run));
+        Some(QueryGuard { id, run })
+    } else {
+        None
+    };
+    tokio::task::spawn_blocking(move || {
+        let _guard = guard;
+        let conn = open(&app, &capture_id)?;
+        if let Some(guard) = &_guard {
+            *guard.run.interrupt.lock().map_err(|e| e.to_string())? =
+                Some(conn.get_interrupt_handle());
+            if guard.run.cancelled.load(Ordering::Relaxed) {
+                return Err("Traffic query cancelled".into());
+            }
+        }
+        query_connection(
+            &conn,
+            &path(&app, &capture_id)?.display().to_string(),
+            query,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 fn page_result(
@@ -1097,24 +1533,32 @@ fn page_result(
             .map_err(|_| "Page offset exceeds supported size.")?,
     );
     let sql = format!(
-        "SELECT record FROM records r WHERE {predicate} {} ORDER BY r.ts,r.id LIMIT ? OFFSET ?",
+        "SELECT id FROM records r WHERE {predicate} {} ORDER BY r.ts,r.id LIMIT ? OFFSET ?",
         if query.errors_only {
             "AND issue_count>0"
         } else {
             ""
         }
     );
-    let mut stmt = tx.prepare(&sql).map_err(|e| e.to_string())?;
-    let raw = stmt
-        .query_map(params_from_iter(record_args.iter()), |r| {
-            r.get::<_, String>(0)
-        })
-        .map_err(|e| e.to_string())?;
     let mut records = Vec::new();
-    for row in raw {
-        records.push(
-            serde_json::from_str(&row.map_err(|e| e.to_string())?).map_err(|e| e.to_string())?,
-        );
+    if !query.omit_records {
+        let mut stmt = tx.prepare(&sql).map_err(|e| e.to_string())?;
+        let ids = stmt
+            .query_map(params_from_iter(record_args.iter()), |r| r.get::<_, i64>(0))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        if query.compact_records && is_v3(tx) {
+            records = compact_records(tx, &ids)?;
+        } else {
+            for id in ids {
+                records.push(if query.compact_records {
+                    compact_record(tx, id)?
+                } else {
+                    read_record(tx, id)?
+                });
+            }
+        }
     }
 
     result.records = records;
@@ -1123,4 +1567,833 @@ fn page_result(
     result.total_records = total_records;
     result.total_pages = total_pages;
     Ok(result)
+}
+
+fn read_record(conn: &Connection, id: i64) -> Result<AccessLogRecord, String> {
+    if is_v3(conn) {
+        return crate::traffic_store_v3::record(conn, id);
+    }
+    let json: String = conn
+        .query_row("SELECT record FROM records WHERE id=?", [id], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    let mut record: AccessLogRecord = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+    record.store_id = Some(id);
+    Ok(record)
+}
+fn compact_record(conn: &Connection, id: i64) -> Result<AccessLogRecord, String> {
+    if !is_v3(conn) {
+        let mut r = read_record(conn, id)?;
+        r.raw_fields.retain(|name, _| {
+            [
+                "c-ip",
+                "cs-username",
+                "cs-host",
+                "s-action",
+                "sc-filter-result",
+                "sc-status",
+                "cs-bytes",
+                "sc-bytes",
+            ]
+            .contains(&name.as_str())
+        });
+        r.raw_line.clear();
+        r.schema.clear();
+        r.normalized.clear();
+        return Ok(r);
+    }
+    compact_records(conn, &[id])?
+        .pop()
+        .ok_or_else(|| "Traffic record not found".into())
+}
+fn compact_records(conn: &Connection, ids: &[i64]) -> Result<Vec<AccessLogRecord>, String> {
+    let selection = serde_json::to_string(ids).map_err(|e| e.to_string())?;
+    let mut issue_map: HashMap<i64, Vec<String>> = HashMap::new();
+    let mut stmt=conn.prepare("SELECT m.record_id,v.name FROM memberships m JOIN vals v ON v.id=m.value_id WHERE m.field=1 AND m.record_id IN (SELECT value FROM json_each(?)) ORDER BY v.name").map_err(|e|e.to_string())?;
+    for row in stmt
+        .query_map([&selection], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+        })
+        .map_err(|e| e.to_string())?
+    {
+        let (id, name) = row.map_err(|e| e.to_string())?;
+        issue_map.entry(id).or_default().push(name);
+    }
+    let mut stmt=conn.prepare("SELECT r.id,r.ts,r.bytes,c.name,u.name,h.name,a.name,f.name,s.name,o.name,k.sequence,k.original_id,r.display_ts FROM records r JOIN canonical k ON k.id=r.id JOIN sources o ON o.id=k.source_id JOIN vals c ON c.id=r.client JOIN vals u ON u.id=r.user JOIN vals h ON h.id=r.host JOIN vals a ON a.id=r.action JOIN vals f ON f.id=r.filter_result JOIN vals s ON s.id=r.status WHERE r.id IN (SELECT value FROM json_each(?)) ORDER BY r.ts,r.id").map_err(|e|e.to_string())?;
+    let rows = stmt
+        .query_map([selection], |r| {
+            let id: i64 = r.get(0)?;
+            let mut fields = BTreeMap::new();
+            for (i, name) in [
+                "c-ip",
+                "cs-username",
+                "cs-host",
+                "s-action",
+                "sc-filter-result",
+                "sc-status",
+            ]
+            .iter()
+            .enumerate()
+            {
+                fields.insert((*name).into(), {
+                    let value: String = r.get(i + 3)?;
+                    crate::traffic_analysis::AccessLogValue {
+                        raw: value.clone(),
+                        availability: if value.is_empty() { "missing" } else { "value" }.into(),
+                        value: if value.is_empty() { None } else { Some(value) },
+                    }
+                });
+            }
+            fields.insert(
+                "cs-bytes".into(),
+                crate::traffic_analysis::semantic_value(r.get::<_, i64>(2)?.to_string()),
+            );
+            let source: String = r.get(9)?;
+            let sequence: i64 = r.get(10)?;
+            let original: Option<String> = r.get(11)?;
+            let issues = issue_map.remove(&id).unwrap_or_default();
+            Ok(AccessLogRecord {
+                store_id: Some(id),
+                raw_line_reconstructed: true,
+                id: original.unwrap_or_else(|| format!("{source}:{sequence}")),
+                source,
+                schema: Vec::new(),
+                raw_line: String::new(),
+                raw_fields: fields,
+                normalized: BTreeMap::new(),
+                timestamp: r
+                    .get::<_, Option<i64>>(1)?
+                    .and_then(chrono::DateTime::from_timestamp_millis)
+                    .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string())
+                    .or(r.get::<_, Option<String>>(12)?),
+                malformed: issues.iter().any(|s| s == "Malformed record"),
+                issues,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_traffic_record(
+    app: AppHandle,
+    capture_id: String,
+    record_id: i64,
+) -> Result<AccessLogRecord, String> {
+    tokio::task::spawn_blocking(move || read_record(&open(&app, &capture_id)?, record_id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[cfg(test)]
+mod store_tests {
+    use super::*;
+    use crate::traffic_store_v3::{
+        self as v3,
+        tests::{database, sample},
+    };
+    fn query(c: &Connection, mut q: TrafficQuery) -> TrafficQueryResult {
+        if q.limit == 0 {
+            q.limit = 1;
+        }
+        if q.page_size == 0 {
+            q.page_size = 2;
+        }
+        // Unique cache identity for each in-memory DB, cache remains scoped across pagination tests.
+        query_connection(c, &format!("test-{:p}", c), q).unwrap()
+    }
+    #[test]
+    fn range_rankings_summary_pagination_networks_and_filters() {
+        let mut c = database();
+        v3::ingest(&mut c, &sample(), &[]).unwrap();
+        let start = epoch(&sample()[0]).unwrap();
+        let base = query(
+            &c,
+            TrafficQuery {
+                start: Some(start),
+                end: Some(start + 60000),
+                compact_records: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(base.summary.requests, 3);
+        assert_eq!(base.summary.bytes, 210);
+        assert_eq!(base.summary.unique_clients, 2);
+        assert_eq!(base.summary.unique_users, 2);
+        assert_eq!(base.rankings["cs-host"][0].name, "a.example");
+        assert_eq!(base.rankings["cs-host"][0].requests, 2);
+        assert_eq!(base.total_pages, 2);
+        assert_eq!(base.records.len(), 2);
+        assert!(base
+            .records
+            .iter()
+            .all(|r| r.raw_line.is_empty() && r.normalized.is_empty()));
+        let next = query(
+            &c,
+            TrafficQuery {
+                start: Some(start),
+                end: Some(start + 60000),
+                page: 2,
+                ..Default::default()
+            },
+        );
+        assert_eq!(next.records[0].id, "fixture:3");
+        assert!(!next.records[0].raw_line.is_empty());
+        let exact = query(
+            &c,
+            TrafficQuery {
+                method: "GET".into(),
+                status: "500".into(),
+                ..Default::default()
+            },
+        );
+        assert_eq!(exact.summary.requests, 1);
+        let substring = query(
+            &c,
+            TrafficQuery {
+                host: ".example".into(),
+                ..Default::default()
+            },
+        );
+        assert_eq!(substring.summary.requests, 3);
+        let errors = query(
+            &c,
+            TrafficQuery {
+                errors_only: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(errors.summary.requests, 3);
+        assert_eq!(errors.total_records, 2);
+        let network = query(
+            &c,
+            TrafficQuery {
+                start: Some(start),
+                network_prefix: Some(24),
+                ..Default::default()
+            },
+        );
+        assert_eq!(network.network_rankings[0].requests, 3);
+        let page = query(
+            &c,
+            TrafficQuery {
+                start: Some(start),
+                ranking_pages: HashMap::from([("cs-host".into(), 2)]),
+                ..Default::default()
+            },
+        );
+        assert_eq!(page.rankings["cs-host"][0].name, "b.example");
+        let report = query(
+            &c,
+            TrafficQuery {
+                omit_records: true,
+                metric: "bytes".into(),
+                start: Some(start),
+                ..Default::default()
+            },
+        );
+        assert!(report.records.is_empty());
+        assert_eq!(report.rankings["cs-host"][0].bytes, 140);
+        let found = query(
+            &c,
+            TrafficQuery {
+                search: "/two".into(),
+                ..Default::default()
+            },
+        );
+        assert_eq!(found.summary.requests, 1);
+        let escaped = query(
+            &c,
+            TrafficQuery {
+                search: "%".into(),
+                ..Default::default()
+            },
+        );
+        assert_eq!(escaped.summary.requests, 0);
+        assert!(query_connection(
+            &c,
+            "invalid",
+            TrafficQuery {
+                start: Some(1),
+                end: Some(0),
+                ..Default::default()
+            }
+        )
+        .is_err());
+    }
+    #[test]
+    fn v2_reader_and_detail_remain_compatible_without_migration() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch("CREATE TABLE meta(key TEXT,value TEXT);INSERT INTO meta VALUES('version','2');CREATE TABLE records(id INTEGER PRIMARY KEY,ts INTEGER,bytes INTEGER,client TEXT,user TEXT,host TEXT,category TEXT,application TEXT,action TEXT,status TEXT,method TEXT,threat TEXT,search TEXT,issue_count INTEGER,denied INTEGER,record TEXT);").unwrap();
+        let mut r = sample().remove(0);
+        r.issues = issues(&r);
+        c.execute("INSERT INTO records VALUES(1,0,30,'192.0.2.1','alice','a.example','News;Tech;News','','TCP_HIT','200','GET','','fixture',0,0,?)",[serde_json::to_string(&r).unwrap()]).unwrap();
+        let actual = read_record(&c, 1).unwrap();
+        assert_eq!(actual.id, r.id);
+        assert_eq!(actual.raw_line, r.raw_line);
+        assert!(!actual.raw_line_reconstructed);
+        let lean = compact_record(&c, 1).unwrap();
+        assert_eq!(lean.store_id, Some(1));
+        assert!(lean.raw_line.is_empty());
+        let (predicate, args) = conditions(
+            &TrafficQuery {
+                method: "GET".into(),
+                host: "a.example".into(),
+                ..Default::default()
+            },
+            false,
+        );
+        let count: i64 = c
+            .query_row(
+                &format!("SELECT COUNT(*) FROM records r WHERE {predicate}"),
+                params_from_iter(args.iter()),
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        assert!(c.prepare("SELECT * FROM canonical").is_err());
+    }
+    #[test]
+    fn range_cache_invalidates_for_late_rows_but_not_unrelated_minutes() {
+        let mut c = database();
+        let rows = sample();
+        let start = epoch(&rows[0]).unwrap();
+        v3::ingest(&mut c, &rows[..1], &[]).unwrap();
+        let select = || TrafficQuery {
+            start: Some(start),
+            end: Some(start + 999),
+            ..Default::default()
+        };
+        assert_eq!(query(&c, select()).summary.requests, 1);
+        v3::ingest(&mut c, &rows[2..], &[]).unwrap();
+        assert_eq!(query(&c, select()).summary.requests, 1);
+        v3::ingest(&mut c, &rows[..1], &[]).unwrap();
+        assert_eq!(query(&c, select()).summary.requests, 2);
+    }
+    fn legacy_fixture(rows: &[AccessLogRecord]) -> Connection {
+        let mut c = database();
+        v3::ingest(&mut c, rows, &[]).unwrap();
+        c.execute_batch("UPDATE meta SET value='2' WHERE key='version';ALTER TABLE records RENAME TO facts_fixture;
+          CREATE TABLE records(id INTEGER PRIMARY KEY,ts INTEGER,bytes INTEGER,client TEXT,user TEXT,host TEXT,category TEXT,application TEXT,action TEXT,status TEXT,method TEXT,threat TEXT,search TEXT,issue_count INTEGER,denied INTEGER,record TEXT);
+          CREATE TABLE dimensions(record_id INTEGER,field TEXT,name TEXT,PRIMARY KEY(record_id,field,name));
+          CREATE INDEX records_legacy_time ON records(ts,id);").unwrap();
+        for (i, row) in rows.iter().enumerate() {
+            let mut r = row.clone();
+            r.issues = issues(row);
+            let id = (i + 1) as i64;
+            let traffic = ["cs-bytes", "sc-bytes"]
+                .iter()
+                .filter_map(|f| value(row, f).parse::<i64>().ok())
+                .sum::<i64>();
+            let search = row
+                .raw_fields
+                .values()
+                .filter_map(|v| v.value.as_deref())
+                .collect::<Vec<_>>()
+                .join(" ");
+            let threat = [
+                "cs-threat-risk",
+                "cs-threat-id",
+                "rs-threat-id",
+                "x-virus-id",
+            ]
+            .map(|f| value(row, f))
+            .join(" ");
+            c.execute(
+                "INSERT INTO records VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                params![
+                    id,
+                    epoch(row),
+                    traffic,
+                    value(row, "c-ip"),
+                    value(row, "cs-username"),
+                    value(row, "cs-host"),
+                    value(row, "cs-categories"),
+                    value(row, "x-bluecoat-application-name"),
+                    value(row, "s-action"),
+                    value(row, "sc-status"),
+                    value(row, "cs-method"),
+                    threat,
+                    search,
+                    r.issues.len() as i64,
+                    i64::from(
+                        r.issues
+                            .iter()
+                            .any(|s| s == "Denied transaction" || s == "Policy denial")
+                    ),
+                    serde_json::to_string(&r).unwrap()
+                ],
+            )
+            .unwrap();
+            for (field, _) in v3::FIELDS {
+                let name = value(row, field);
+                if !name.is_empty() {
+                    c.execute(
+                        "INSERT OR IGNORE INTO dimensions VALUES(?,?,?)",
+                        params![id, field, name],
+                    )
+                    .unwrap();
+                }
+            }
+            for name in value(row, "cs-categories")
+                .split(';')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                c.execute(
+                    "INSERT OR IGNORE INTO dimensions VALUES(?,'cs-categories',?)",
+                    params![id, name],
+                )
+                .unwrap();
+            }
+            for name in r.issues {
+                c.execute(
+                    "INSERT OR IGNORE INTO dimensions VALUES(?,'x-issue',?)",
+                    params![id, name],
+                )
+                .unwrap();
+            }
+        }
+        c
+    }
+    #[test]
+    fn v2_v3_analytics_and_report_queries_are_equivalent() {
+        let rows = sample();
+        let legacy = legacy_fixture(&rows);
+        let mut compact = database();
+        v3::ingest(&mut compact, &rows, &[]).unwrap();
+        let start = epoch(&rows[0]).unwrap();
+        for filters in [
+            TrafficQuery::default(),
+            TrafficQuery {
+                start: Some(start),
+                end: Some(start + 1000),
+                ..Default::default()
+            },
+            TrafficQuery {
+                search: "example".into(),
+                ..Default::default()
+            },
+            TrafficQuery {
+                category: "Tech".into(),
+                ..Default::default()
+            },
+            TrafficQuery {
+                threat: " ".into(),
+                ..Default::default()
+            },
+            TrafficQuery {
+                method: "GET".into(),
+                ..Default::default()
+            },
+        ] {
+            for metric in ["requests", "bytes"] {
+                let mut q: TrafficQuery =
+                    serde_json::from_value(serde_json::to_value(&filters).unwrap()).unwrap();
+                q.metric = metric.into();
+                q.omit_records = true;
+                q.limit = 50;
+                q.network_prefix = Some(24);
+                let q2 = serde_json::from_value(serde_json::to_value(&q).unwrap()).unwrap();
+                let left =
+                    query_connection(&legacy, &format!("legacy-{start}-{metric}"), q).unwrap();
+                let right =
+                    query_connection(&compact, &format!("compact-{start}-{metric}"), q2).unwrap();
+                assert_eq!(
+                    serde_json::to_value(left).unwrap(),
+                    serde_json::to_value(right).unwrap()
+                );
+            }
+        }
+    }
+    #[test]
+    fn streaming_dictionary_growth_is_read_in_one_snapshot() {
+        let mut c = database();
+        let rows = sample();
+        v3::ingest(&mut c, &rows[..1], &[]).unwrap();
+        assert_eq!(
+            query(
+                &c,
+                TrafficQuery {
+                    search: "bob".into(),
+                    ..Default::default()
+                }
+            )
+            .summary
+            .requests,
+            0
+        );
+        v3::ingest(&mut c, &rows[1..], &[]).unwrap();
+        assert_eq!(
+            query(
+                &c,
+                TrafficQuery {
+                    search: "bob".into(),
+                    ..Default::default()
+                }
+            )
+            .summary
+            .requests,
+            1
+        );
+    }
+    #[test]
+    #[ignore = "Synthetic benchmark writes only a uniquely created temporary database; opt in explicitly"]
+    fn benchmark_compact_store() {
+        use crate::traffic_analysis::AccessLogParser;
+        use std::time::Instant;
+        let count = std::env::var("TRAFFIC_BENCH_ROWS")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(100_000)
+            .clamp(1000, 2_000_000);
+        let file = std::env::temp_dir().join(format!(
+            "proxytools-traffic-bench-{}-{}.sqlite",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&file)
+            .unwrap();
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                for suffix in ["", "-wal", "-shm"] {
+                    let _ = std::fs::remove_file(format!("{}{suffix}", self.0.display()));
+                }
+            }
+        }
+        let _cleanup = Cleanup(file.clone());
+        let mut c = Connection::open(&file).unwrap();
+        c.execute_batch("PRAGMA journal_mode=WAL;PRAGMA synchronous=NORMAL;CREATE TABLE meta(key TEXT,value TEXT);INSERT INTO meta VALUES('version','3');").unwrap();
+        v3::create(&c).unwrap();
+        let parser=AccessLogParser{fields:"date time c-ip cs-username cs-host cs-method sc-status s-action cs-categories cs-bytes sc-bytes cs-uri-path cs(User-Agent)".split_whitespace().map(str::to_owned).collect()};
+        let begin = Instant::now();
+        let mut raw = 0usize;
+        let mut old_json = 0usize;
+        for offset in (0..count).step_by(1000) {
+            let mut batch = Vec::new();
+            for i in offset..(offset + 1000).min(count) {
+                let second = i % 86400;
+                let line=format!("2026-01-01 {:02}:{:02}:{:02} 192.0.{}.{} user{} host{}.example {} {} {} \"News;Tech\" {} {} /unique/path/{i}?q={} \"Synthetic Browser 1.0\"",second/3600,(second/60)%60,second%60,(i/254)%254,i%254+1,i%2000,i%10000,if i%10==0{"POST"}else{"GET"},if i%20==0{403}else{200},if i%20==0{"DENIED"}else{"TCP_HIT"},i%1000,i%10000,i*17);
+                raw += line.len();
+                let r = parser.parse_line(&line, "synthetic.log", i + 1).unwrap().0;
+                old_json += serde_json::to_vec(&r).unwrap().len();
+                batch.push(r);
+            }
+            v3::ingest(&mut c, &batch, &[]).unwrap();
+        }
+        let ingest_ms = begin.elapsed().as_millis();
+        c.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)").unwrap();
+        let payload: i64 = c
+            .query_row(
+                "SELECT SUM(length(tokens)+COALESCE(length(exception),0)) FROM canonical",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let bytes = std::fs::metadata(&file).unwrap().len();
+        let start =
+            chrono::NaiveDateTime::parse_from_str("2026-01-01 00:00:00", "%Y-%m-%d %H:%M:%S")
+                .unwrap()
+                .and_utc()
+                .timestamp_millis();
+        if std::env::var_os("TRAFFIC_QUERY_PROFILE").is_some() {
+            for sql in ["SELECT r.bytes,r.client,r.user,r.host,r.application,r.action,r.status,r.method,r.filter_result,r.policy_action,r.risk,r.ts,r.issue_count,r.denied FROM records r WHERE r.ts>=? AND r.ts<=?", "SELECT m.field,m.value_id,r.bytes FROM records r CROSS JOIN memberships m ON m.record_id=r.id WHERE r.ts>=? AND r.ts<=?"] {
+                let mut statement=c.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+                let plan=statement.query_map(params![start,start+86_400_000],|r|r.get::<_,String>(3)).unwrap().collect::<Result<Vec<_>,_>>().unwrap();eprintln!("traffic_explain actual_scan {plan:?}");
+            }
+            for (label,sql) in [("fallback-rankings",v3_counts_sql("r.ts>=? AND r.ts<=?")),("summary","SELECT COUNT(*),SUM(bytes),COUNT(DISTINCT NULLIF(user,0)),COUNT(DISTINCT NULLIF(client,0)),COUNT(DISTINCT NULLIF(host,0)) FROM records r WHERE r.ts>=? AND r.ts<=?".into())] {
+                let mut stmt=c.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+                let plans=stmt.query_map(params![start,start+86_400_000],|r|r.get::<_,String>(3)).unwrap().collect::<Result<Vec<_>,_>>().unwrap();
+                eprintln!("traffic_explain {label} {plans:?}");
+            }
+        }
+        drop(c);
+        let c = Connection::open_with_flags(&file, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        let mut timings = Vec::new();
+        for (label, q) in [
+            (
+                "range-first-reader",
+                TrafficQuery {
+                    start: Some(start),
+                    end: Some(start + 86_400_000),
+                    omit_records: true,
+                    limit: 10,
+                    ..Default::default()
+                },
+            ),
+            (
+                "ranking-page-reuse",
+                TrafficQuery {
+                    start: Some(start),
+                    end: Some(start + 86_400_000),
+                    omit_records: true,
+                    limit: 10,
+                    ranking_pages: HashMap::from([("cs-host".into(), 5)]),
+                    ..Default::default()
+                },
+            ),
+            (
+                "metric-reuse",
+                TrafficQuery {
+                    start: Some(start),
+                    end: Some(start + 86_400_000),
+                    omit_records: true,
+                    limit: 10,
+                    metric: "bytes".into(),
+                    ..Default::default()
+                },
+            ),
+            (
+                "substring-search",
+                TrafficQuery {
+                    search: "/unique/path/987".into(),
+                    omit_records: true,
+                    limit: 10,
+                    ..Default::default()
+                },
+            ),
+            (
+                "deep-page",
+                TrafficQuery {
+                    page: count / 100,
+                    page_size: 100,
+                    compact_records: true,
+                    limit: 10,
+                    ..Default::default()
+                },
+            ),
+        ] {
+            let t = Instant::now();
+            let result = query_connection(&c, &file.display().to_string(), q).unwrap();
+            timings.push((label, t.elapsed().as_millis(), result.summary.requests));
+        }
+        eprintln!("traffic_benchmark rows={count} raw_bytes={raw} legacy_json_payload_bytes={old_json} canonical_payload_bytes={payload} v3_database_bytes={bytes} debug_assertions={} ingest_ms={ingest_ms} query_ms={timings:?}", cfg!(debug_assertions));
+        drop(c);
+    }
+    #[test]
+    fn quoted_semantic_values_are_not_decoded_twice_in_compact_pages() {
+        let parser = crate::traffic_analysis::AccessLogParser {
+            fields: vec!["cs-username".into(), "cs-host".into()],
+        };
+        let row = parser
+            .parse_line(r#""\"alice\"" "\"None\"""#, "quoted", 1)
+            .unwrap()
+            .0;
+        let mut c = database();
+        v3::ingest(&mut c, &[row.clone()], &[]).unwrap();
+        let compact = compact_records(&c, &[1]).unwrap().remove(0);
+        assert_eq!(
+            compact.raw_fields["cs-username"].value,
+            row.raw_fields["cs-username"].value
+        );
+        assert_eq!(
+            compact.raw_fields["cs-host"].value,
+            row.raw_fields["cs-host"].value
+        );
+    }
+    #[test]
+    fn v2_file_reader_is_read_only_and_does_not_change_file_bytes() {
+        let file = std::env::temp_dir().join(format!(
+            "proxytools-v2-readonly-{}-{}.sqlite",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&file)
+            .unwrap();
+        let c = Connection::open(&file).unwrap();
+        c.execute_batch(
+            "CREATE TABLE meta(key TEXT,value TEXT);INSERT INTO meta VALUES('version','2');",
+        )
+        .unwrap();
+        drop(c);
+        let before = std::fs::read(&file).unwrap();
+        let c = open_file(&file).unwrap();
+        assert!(!is_v3(&c));
+        assert!(c
+            .execute_batch("CREATE TABLE forbidden(id INTEGER)")
+            .is_err());
+        drop(c);
+        assert_eq!(std::fs::read(&file).unwrap(), before);
+        std::fs::remove_file(file).unwrap();
+    }
+    #[test]
+    fn cancellation_marks_work_and_cleans_up_registry() {
+        let c = Connection::open_in_memory().unwrap();
+        let run = Arc::new(QueryRun {
+            cancelled: AtomicBool::new(false),
+            interrupt: Mutex::new(Some(c.get_interrupt_handle())),
+        });
+        let id = format!(
+            "cancel-test-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        );
+        QUERY_RUNS
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .unwrap()
+            .insert(id.clone(), Arc::clone(&run));
+        cancel_traffic_query(id.clone()).unwrap();
+        assert!(run.cancelled.load(Ordering::Relaxed));
+        assert!(CANCELLED_QUERIES
+            .get()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .contains(&id));
+        drop(QueryGuard {
+            id: id.clone(),
+            run,
+        });
+        assert!(!QUERY_RUNS.get().unwrap().lock().unwrap().contains_key(&id));
+    }
+    #[test]
+    fn obsolete_query_interrupts_an_active_sql_statement() {
+        let c = Connection::open_in_memory().unwrap();
+        let (sent, started) = std::sync::mpsc::channel();
+        let sent = Mutex::new(Some(sent));
+        c.create_scalar_function(
+            "started",
+            0,
+            rusqlite::functions::FunctionFlags::default(),
+            move |_| {
+                if let Some(sent) = sent.lock().unwrap().take() {
+                    sent.send(()).unwrap();
+                }
+                Ok(1i64)
+            },
+        )
+        .unwrap();
+        let run = Arc::new(QueryRun {
+            cancelled: AtomicBool::new(false),
+            interrupt: Mutex::new(Some(c.get_interrupt_handle())),
+        });
+        let id = format!(
+            "active-cancel-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        );
+        QUERY_RUNS
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .unwrap()
+            .insert(id.clone(), Arc::clone(&run));
+        let thread = std::thread::spawn(move || {
+            c.query_row("WITH RECURSIVE n(x) AS (VALUES(0) UNION ALL SELECT x+1 FROM n WHERE x<10000000) SELECT SUM(started()) FROM n",[],|r|r.get::<_,i64>(0))
+        });
+        started.recv_timeout(Duration::from_secs(5)).unwrap();
+        cancel_traffic_query(id.clone()).unwrap();
+        assert!(thread.join().unwrap().is_err());
+        drop(QueryGuard { id, run });
+    }
+    #[test]
+    fn pre_epoch_minute_buckets_match_global_and_filtered_results() {
+        let p = crate::traffic_analysis::AccessLogParser {
+            fields: vec!["date".into(), "time".into()],
+        };
+        let row = p.parse_line("1969-12-31 23:59:59", "old", 1).unwrap().0;
+        let mut c = database();
+        v3::ingest(&mut c, &[row], &[]).unwrap();
+        let all = query(&c, TrafficQuery::default());
+        let filtered = query(
+            &c,
+            TrafficQuery {
+                start: Some(-1000),
+                ..Default::default()
+            },
+        );
+        assert_eq!(all.timeline[0].epoch, -60000);
+        assert_eq!(all.timeline[0].epoch, filtered.timeline[0].epoch);
+    }
+    #[test]
+    fn range_cache_refreshes_global_filter_options_after_unrelated_ingest() {
+        let mut c = database();
+        let mut rows = sample();
+        let start = epoch(&rows[0]).unwrap();
+        v3::ingest(&mut c, &rows[..1], &[]).unwrap();
+        let selection = || TrafficQuery {
+            start: Some(start),
+            end: Some(start + 999),
+            ..Default::default()
+        };
+        assert!(!query(&c, selection()).options["cs-method"].contains(&"PATCH".into()));
+        rows[2].raw_fields.insert(
+            "cs-method".into(),
+            crate::traffic_analysis::semantic_value("PATCH".into()),
+        );
+        rows[2].raw_line = rows[2].raw_line.replace("GET", "PATCH");
+        v3::ingest(&mut c, &rows[2..], &[]).unwrap();
+        let selected = query(&c, selection());
+        assert_eq!(selected.summary.requests, 1);
+        assert!(selected.options["cs-method"].contains(&"PATCH".into()));
+    }
+    #[test]
+    fn compact_pages_preserve_unindexable_timestamp_text() {
+        let p = crate::traffic_analysis::AccessLogParser {
+            fields: vec!["date".into(), "time".into()],
+        };
+        let r = p
+            .parse_line("2026-01-01 00:00:00.500", "fraction", 1)
+            .unwrap()
+            .0;
+        assert!(epoch(&r).is_none());
+        let mut c = database();
+        v3::ingest(&mut c, &[r.clone()], &[]).unwrap();
+        let summary = compact_records(&c, &[1]).unwrap();
+        assert_eq!(summary[0].timestamp, r.timestamp);
+    }
+    #[test]
+    fn high_cardinality_sql_fallback_matches_cached_integer_aggregation() {
+        let mut c = database();
+        let rows = sample();
+        v3::ingest(&mut c, &rows, &[]).unwrap();
+        let make = || TrafficQuery {
+            start: epoch(&rows[0]),
+            end: epoch(&rows[2]),
+            metric: "bytes".into(),
+            limit: 1,
+            ranking_pages: HashMap::from([("cs-host".into(), 2)]),
+            omit_records: true,
+            ..Default::default()
+        };
+        let expected = query_connection(&c, "fallback-reference", make()).unwrap();
+        let mut selection = serde_json::to_value(make()).unwrap();
+        let object = selection.as_object_mut().unwrap();
+        for key in [
+            "page",
+            "pageSize",
+            "errorsOnly",
+            "compactRecords",
+            "omitRecords",
+            "rankingPages",
+            "metric",
+            "limit",
+            "networkPrefix",
+            "network",
+            "networkPage",
+            "networkListPage",
+        ] {
+            object.remove(key);
+        }
+        let identity = format!(
+            "forced-fallback-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        );
+        let key = format!("{identity}:3:{selection}");
+        LARGE_RANGES
+            .get_or_init(|| Mutex::new(VecDeque::new()))
+            .lock()
+            .unwrap()
+            .push_back(key);
+        let actual = query_connection(&c, &identity, make()).unwrap();
+        assert_eq!(
+            serde_json::to_value(actual).unwrap(),
+            serde_json::to_value(expected).unwrap()
+        );
+    }
 }

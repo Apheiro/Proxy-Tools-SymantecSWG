@@ -21,6 +21,10 @@ pub struct AccessLogValue {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccessLogRecord {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub store_id: Option<i64>,
+    #[serde(default)]
+    pub raw_line_reconstructed: bool,
     #[serde(default)]
     pub issues: Vec<String>,
     pub id: String,
@@ -195,8 +199,8 @@ fn timeline_values(map: &BTreeMap<i64, (usize, u64)>) -> Vec<TrafficBucket> {
 static NEXT_PARSE_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Default)]
-struct AccessLogParser {
-    fields: Vec<String>,
+pub(crate) struct AccessLogParser {
+    pub(crate) fields: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -228,7 +232,7 @@ impl AccessLogParser {
         true
     }
 
-    fn parse_line(
+    pub(crate) fn parse_line(
         &self,
         raw_line: &str,
         source: &str,
@@ -241,6 +245,16 @@ impl AccessLogParser {
             return None;
         }
         let tokens = tokenize_elff(raw_line);
+        Some(self.from_tokens(raw_line, source, sequence, tokens))
+    }
+
+    pub(crate) fn from_tokens(
+        &self,
+        raw_line: &str,
+        source: &str,
+        sequence: usize,
+        tokens: Vec<String>,
+    ) -> (AccessLogRecord, Option<AccessLogDiagnostic>) {
         let malformed = tokens.len() != self.fields.len();
         let mut raw_fields = BTreeMap::new();
         let mut normalized = BTreeMap::new();
@@ -266,8 +280,10 @@ impl AccessLogParser {
             }
             .to_string(),
         });
-        Some((
+        (
             AccessLogRecord {
+                store_id: None,
+                raw_line_reconstructed: false,
                 issues: Vec::new(),
                 id: format!("{source}:{sequence}"),
                 source: source.to_string(),
@@ -279,11 +295,11 @@ impl AccessLogParser {
                 malformed,
             },
             diagnostic,
-        ))
+        )
     }
 }
 
-fn tokenize_elff(line: &str) -> Vec<String> {
+pub(crate) fn tokenize_elff(line: &str) -> Vec<String> {
     let mut values = Vec::new();
     let mut current = String::new();
     let mut quote: Option<char> = None;
@@ -315,7 +331,8 @@ fn tokenize_elff(line: &str) -> Vec<String> {
     values
 }
 
-fn semantic_value(raw: String) -> AccessLogValue {
+// Persisted v3 interpretation version 1: preserve this behavior; evolve via a new version.
+pub(crate) fn semantic_value(raw: String) -> AccessLogValue {
     let unquoted = if raw.len() >= 2
         && ((raw.starts_with('"') && raw.ends_with('"'))
             || (raw.starts_with('\'') && raw.ends_with('\'')))
@@ -591,7 +608,10 @@ pub(crate) fn parse_session_chunk(
     let incomplete = data.split_off(complete_end);
     session.carry = incomplete;
 
-    let record_source = session.record_source.clone().unwrap_or_else(|| source.clone());
+    let record_source = session
+        .record_source
+        .clone()
+        .unwrap_or_else(|| source.clone());
     let (records, diagnostics) = consume_access_log_block(session, &data, &record_source)?;
 
     let field_availability = session
@@ -906,8 +926,8 @@ pub async fn save_traffic_analysis(
             let _sessions = sessions.lock().map_err(|e| e.to_string())?;
             crate::traffic_store::save(&app, &parse_id)
         })
-            .await
-            .map_err(|e| e.to_string())?;
+        .await
+        .map_err(|e| e.to_string())?;
     }
     tokio::task::spawn_blocking(move || {
         let mut sessions = sessions.lock().map_err(|e| e.to_string())?;
