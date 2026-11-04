@@ -156,7 +156,7 @@ export default function TrafficTimeline({
     for (const item of sorted) {
       const index = Math.floor((item.epoch - first) / width);
       populated.add(index);
-      values[index] += density ? item.requests : item[metric];
+      values[index] += item[metric];
     }
     const observed = [...populated].map((index) => values[index]);
     return {
@@ -200,7 +200,7 @@ export default function TrafficTimeline({
         const item = params as { dataIndex: number };
         const start = first + item.dataIndex * width;
         const value = values[item.dataIndex] ?? 0;
-        return `${format(start)}<br/>Through ${format(start + width - 1)}<br/>${density || metric === 'requests' ? `${value.toLocaleString()} requests` : formatBytes(value)}`;
+        return `${format(start)}<br/>Through ${format(start + width - 1)}<br/>${metric === 'requests' ? `${value.toLocaleString()} requests` : formatBytes(value)}`;
       },
     },
     // The slider controls a separate axis so the heatmap keeps its full extent.
@@ -414,7 +414,7 @@ export default function TrafficTimeline({
       role='img'
       aria-label={
         density
-          ? `Request density heat map in ${timeZone}, with a range slider`
+          ? `${metric === 'bytes' ? 'Byte' : 'Request'} density heat map in ${timeZone}, with a range slider`
           : `${metric === 'bytes' ? 'Bytes' : 'Requests'} over time, column chart in ${timeZone}`
       }
     >
@@ -436,7 +436,10 @@ export default function TrafficTimeline({
             slider
           </span>
           <span className='flex items-center gap-2'>
-            Min {minimum.toLocaleString()}
+            Min{' '}
+            {metric === 'bytes'
+              ? formatBytes(minimum)
+              : minimum.toLocaleString()}
             <span
               className='h-2 w-24 rounded border'
               style={{
@@ -446,7 +449,10 @@ export default function TrafficTimeline({
                     : `linear-gradient(to right, ${DENSITY_COLORS.join(', ')})`,
               }}
             />
-            Max {maximum.toLocaleString()} requests
+            Max{' '}
+            {metric === 'bytes'
+              ? formatBytes(maximum)
+              : `${maximum.toLocaleString()} requests`}
             {minimum === maximum && ' · No variation'}
           </span>
         </div>

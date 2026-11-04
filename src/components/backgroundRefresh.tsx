@@ -1,14 +1,24 @@
 'use client';
+import { useEffect, useState } from 'react';
 import { LoaderCircle } from 'lucide-react';
 
 export default function BackgroundRefresh({
   active,
   label = 'Updating data…',
+  delayMs = 0,
 }: {
   active: boolean;
   label?: string;
+  delayMs?: number;
 }) {
-  if (!active) return null;
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    setVisible(false);
+    if (!active || !delayMs) return;
+    const timer = setTimeout(() => setVisible(true), delayMs);
+    return () => clearTimeout(timer);
+  }, [active, delayMs]);
+  if (!active || (delayMs > 0 && !visible)) return null;
   return (
     <output
       aria-live='polite'
