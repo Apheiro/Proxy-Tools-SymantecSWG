@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.11.0](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/compare/v0.10.0...v0.11.0) (2026-11-04)
+
+
+### Features
+
+* **traffic:** add compact SQLite v3 storage and optimize analytics ([520de6c](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/commit/520de6c5fd42c035ac11269d1a54edd5fae58a8c))
+* **traffic:** fetch record details on demand and document v3 behavior ([84a26b4](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/commit/84a26b4424638a5c9181b177fce10aaa6445e0b7))
+
+
+### Bug Fixes
+
+* **pac:** honor menu preference and confirm native text downloads ([1d790e3](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/commit/1d790e3b9bde62884b5391c7f485e797d1ac2420))
+
 ## [0.10.0](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/compare/v0.9.0...v0.10.0) (2026-11-04)
 
 
