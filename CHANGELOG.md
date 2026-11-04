@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.10.0](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/compare/v0.9.0...v0.10.0) (2026-11-04)
+
+
+### Features
+
+* **pac:** add WPAD merge workspace and tagged file actions ([9a5857a](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/commit/9a5857a3e54bbf370d1869f63a1f24af2c9a7f04))
+* **traffic:** paginate rankings and explore processed day windows ([d37c1b0](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/commit/d37c1b087fc0e972881e33809c61d2cc41c6314b))
+
+
+### Bug Fixes
+
+* **traffic:** honor byte heatmap metric and support delayed refresh indicator ([bf9fbf7](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/commit/bf9fbf7d4ff63b22703b49bbedefc839b8bc84f7))
+
 ## [0.9.0](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/compare/v0.8.0...v0.9.0) (2026-11-03)
 
 
