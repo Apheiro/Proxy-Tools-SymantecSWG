@@ -280,3 +280,41 @@ export function ranked(
     .sort((a, b) => b.value - a.value)
     .slice(0, limit);
 }
+
+/** Calendar dates and boundaries in the same zone used by Traffic Analysis. */
+export function trafficDayFormatter(timeZone: string) {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  return (epoch: number) => {
+    const parts = Object.fromEntries(
+      formatter
+        .formatToParts(epoch)
+        .map((part) => [part.type, part.value]),
+    );
+    return `${parts.year}-${parts.month}-${parts.day}`;
+  };
+}
+
+export function trafficDayBoundary(day: string, timeZone: string) {
+  const dateOf = trafficDayFormatter(timeZone);
+  const midnight = Date.parse(`${day}T00:00:00Z`);
+  // Find local midnight, including offset changes and days of 23 or 25 hours.
+  let low = midnight - 36 * 3600000;
+  let high = midnight + 36 * 3600000;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (dateOf(middle) < day) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
+
+export function addTrafficDays(day: string, count: number) {
+  const date = new Date(`${day}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + count);
+  return date.toISOString().slice(0, 10);
+}

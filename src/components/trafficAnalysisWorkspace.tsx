@@ -44,6 +44,7 @@ import { dateTimeToISO, isoToDateTime } from '@/lib/dateTime';
 import getCredentials from '@/lib/getCredentials';
 import { useScrapedData } from '@/lib/scrapingCache';
 import {
+  addTrafficDays,
   bytesOf,
   createTrafficTimeFormatter,
   destinationOf,
@@ -51,6 +52,8 @@ import {
   formatBytes,
   type TrafficDataset,
   type TrafficRecord,
+  trafficDayBoundary,
+  trafficDayFormatter,
   trafficTimeZones,
   utcTrafficEpoch,
 } from '@/lib/trafficAnalysis';
@@ -114,6 +117,12 @@ export default function TrafficAnalysisWorkspace({
     'requests',
   );
   const [limit, setLimit] = useState(10);
+  const [rankingPages, setRankingPages] = useState<
+    Record<string, number>
+  >({});
+  const [dayStart, setDayStart] = useState('');
+  const [dayCount, setDayCount] = useState(1);
+  const initializedDays = useRef('');
   const [networkPrefix, setNetworkPrefix] = useState(24);
   const [selectedNetwork, setSelectedNetwork] = useState('');
   const [networkPage, setNetworkPage] = useState(1);
@@ -234,12 +243,18 @@ export default function TrafficAnalysisWorkspace({
     setExportingPdf(false);
     setExportMessage('');
     setRange({ start: null, end: null });
+    setDayStart('');
+    setDayCount(1);
+    initializedDays.current = '';
   }, [captureId]);
   useEffect(() => {
     setPage(1);
     setNetworkPage(1);
     setNetworkListPage(1);
   }, [filters, range.start, range.end, pageSize, tab, metric]);
+  useEffect(() => {
+    setRankingPages({});
+  }, [captureId, filters, range.start, range.end, metric, limit]);
   useEffect(() => {
     setDraftStart(dateInput(range.start));
     setDraftEnd(dateInput(range.end));
@@ -257,6 +272,7 @@ export default function TrafficAnalysisWorkspace({
       pageSize,
       errorsOnly: tab === 'Errors & Security',
       limit,
+      rankingPages,
       metric,
       networkPrefix: tab === 'IP Networks' ? networkPrefix : null,
       network: selectedNetwork,
@@ -271,6 +287,7 @@ export default function TrafficAnalysisWorkspace({
       pageSize,
       tab,
       limit,
+      rankingPages,
       metric,
       networkPrefix,
       selectedNetwork,
@@ -530,12 +547,76 @@ export default function TrafficAnalysisWorkspace({
       toast.error('Enter a valid UTC range with start before end.');
       return;
     }
+    setDayStart('');
     updateRange({ start, end });
   };
   const filter = (name: keyof CaptureFilters, value: string) =>
     setFilters((previous) => ({ ...previous, [name]: value }));
   const summary = analysis?.summary;
-  const fullTimeline = capture.dataset?.timeline ?? [];
+  const fullTimeline = useMemo(
+    () => capture.dataset?.timeline ?? [],
+    [capture.dataset?.timeline],
+  );
+  const availableDays = useMemo(() => {
+    const dayOf = trafficDayFormatter(zone);
+    return [
+      ...new Set(fullTimeline.map((item) => dayOf(item.epoch))),
+    ].sort();
+  }, [fullTimeline, zone]);
+  useEffect(() => {
+    if (!captureId || !availableDays.length) return;
+    const key = `${captureId}:${zone}`;
+    if (initializedDays.current === key) return;
+    initializedDays.current = key;
+    setDayStart((previous) =>
+      availableDays.includes(previous) ? previous : availableDays[0],
+    );
+  }, [captureId, availableDays, zone]);
+  const dayWindow = useMemo(
+    () =>
+      dayStart
+        ? {
+            start: trafficDayBoundary(dayStart, zone),
+            end:
+              trafficDayBoundary(
+                addTrafficDays(dayStart, dayCount),
+                zone,
+              ) - 1,
+          }
+        : null,
+    [dayStart, dayCount, zone],
+  );
+  useEffect(() => {
+    if (dayWindow) updateRange(dayWindow);
+  }, [dayWindow, updateRange]);
+  const dayTimeline = useMemo(
+    () =>
+      dayWindow
+        ? fullTimeline.filter(
+            (item) =>
+              item.epoch + 59999 >= dayWindow.start &&
+              item.epoch <= dayWindow.end,
+          )
+        : fullTimeline,
+    [fullTimeline, dayWindow],
+  );
+  const dayIndex = availableDays.indexOf(dayStart);
+  const chooseDay = (index: number) =>
+    setDayStart(availableDays[index]);
+  const rankingPagination = (field: string) => ({
+    page: Math.min(
+      rankingPages[field] ?? 1,
+      Math.max(
+        1,
+        Math.ceil((analysis?.rankingCounts?.[field] ?? 0) / limit),
+      ),
+    ),
+    total: analysis?.rankingCounts?.[field] ?? 0,
+    pageSize: limit,
+    busy: analysisLoading,
+    onPage: (next: number) =>
+      setRankingPages((previous) => ({ ...previous, [field]: next })),
+  });
   const fullEnd =
     (fullTimeline.length
       ? (fullTimeline.at(-1)?.epoch ?? 0) + 59999
@@ -561,12 +642,14 @@ export default function TrafficAnalysisWorkspace({
       : 'Selected range / filters';
   const options = analysis?.options ?? {};
   const rows = analysis?.records ?? [];
-  const setPreset = (minutes: number | null) =>
+  const setPreset = (minutes: number | null) => {
+    setDayStart('');
     updateRange(
       minutes == null || fullEnd == null
         ? { start: null, end: null }
         : { start: fullEnd - minutes * 60000, end: fullEnd },
     );
+  };
 
   const exportPdf = async () => {
     const dataset = capture.dataset;
@@ -684,6 +767,7 @@ export default function TrafficAnalysisWorkspace({
       })}
     >
       <BackgroundRefresh
+        delayMs={3000}
         active={indexBusy || analysisLoading}
         label={
           indexBusy
@@ -818,23 +902,7 @@ export default function TrafficAnalysisWorkspace({
               >
                 Upload logs
               </Button>
-              <Button
-                size='sm'
-                variant='outline'
-                disabled={capture.busy}
-                onClick={() =>
-                  void invoke<string>('get_mock_access_log')
-                    .then((content) =>
-                      capture.loadFile(
-                        new File([content], 'sample-access-log.log'),
-                        workers,
-                      ),
-                    )
-                    .catch((error) => toast.error(String(error)))
-                }
-              >
-                Explore demo data
-              </Button>
+
               <SelectField
                 className='max-w-80'
                 value=''
@@ -1017,6 +1085,28 @@ export default function TrafficAnalysisWorkspace({
           )}
         </div>
       )}
+      {mode === 'static' && (
+        <div className='flex shrink-0 justify-end'>
+          <Button
+            size='sm'
+            variant='ghost'
+            className='h-7 px-2 text-xs text-muted-foreground'
+            disabled={capture.busy}
+            onClick={() =>
+              void invoke<string>('get_mock_access_log')
+                .then((content) =>
+                  capture.loadFile(
+                    new File([content], 'sample-access-log.log'),
+                    workers,
+                  ),
+                )
+                .catch((error) => toast.error(String(error)))
+            }
+          >
+            Explore demo data
+          </Button>
+        </div>
+      )}
       <nav
         className='flex shrink-0 gap-1 overflow-x-auto border-b'
         aria-label='Traffic analysis views'
@@ -1052,8 +1142,9 @@ export default function TrafficAnalysisWorkspace({
                       Capture timeline
                     </CardTitle>
                     <p className='mt-1 text-xs text-muted-foreground'>
-                      Request density across the complete capture.
-                      Select a cell or drag the range handles.
+                      {metric === 'bytes' ? 'Byte' : 'Request'}{' '}
+                      density across the selected days. Select a cell
+                      or drag the range handles.
                     </p>
                   </div>
                   <div className='flex items-center gap-2'>
@@ -1076,9 +1167,93 @@ export default function TrafficAnalysisWorkspace({
                   </div>
                 </CardHeader>
                 <CardContent className='space-y-2 px-4'>
+                  {!!availableDays.length && (
+                    <div className='flex flex-wrap items-end gap-2 pb-2'>
+                      <label className='space-y-1 text-xs text-muted-foreground'>
+                        Period
+                        <SelectField
+                          value={dayStart ? 'day' : 'all'}
+                          aria-label='Analysis period'
+                          onValueChange={(value) =>
+                            value === 'all'
+                              ? setPreset(null)
+                              : chooseDay(0)
+                          }
+                        >
+                          <SelectOption value='day'>Day</SelectOption>
+                          <SelectOption value='all'>
+                            All time
+                          </SelectOption>
+                        </SelectField>
+                      </label>
+                      {dayStart && (
+                        <>
+                          <Button
+                            size='sm'
+                            variant='outline'
+                            disabled={dayIndex <= 0}
+                            onClick={() => chooseDay(dayIndex - 1)}
+                          >
+                            Previous
+                          </Button>
+                          <label className='space-y-1 text-xs text-muted-foreground'>
+                            Starting day ({zone})
+                            <SelectField
+                              value={dayStart}
+                              aria-label='Starting day'
+                              onValueChange={setDayStart}
+                            >
+                              {availableDays.map((day) => (
+                                <SelectOption key={day} value={day}>
+                                  {day}
+                                </SelectOption>
+                              ))}
+                            </SelectField>
+                          </label>
+                          <Button
+                            size='sm'
+                            variant='outline'
+                            disabled={
+                              dayIndex >= availableDays.length - 1
+                            }
+                            onClick={() => chooseDay(dayIndex + 1)}
+                          >
+                            Next
+                          </Button>
+                          <label className='space-y-1 text-xs text-muted-foreground'>
+                            Window · {dayCount}{' '}
+                            {dayCount === 1 ? 'day' : 'days'}
+                            <input
+                              type='number'
+                              min={1}
+                              step={1}
+                              value={dayCount}
+                              aria-label='Number of days'
+                              className={`${INPUT} block w-24`}
+                              onChange={(event) => {
+                                const count = Number(
+                                  event.target.value,
+                                );
+                                if (
+                                  Number.isSafeInteger(count) &&
+                                  count >= 1 &&
+                                  count <= 366000
+                                )
+                                  setDayCount(count);
+                              }}
+                            />
+                          </label>
+                          <span className='pb-2 text-xs text-muted-foreground'>
+                            {dayIndex + 1} / {availableDays.length}{' '}
+                            available days
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  )}
                   <TrafficTimeline
                     variant='density'
-                    timeline={fullTimeline}
+                    timeline={dayTimeline}
                     range={range}
                     onRange={updateRange}
                     timeZone={zone}
@@ -1482,6 +1657,7 @@ export default function TrafficAnalysisWorkspace({
                           ).map(([label, field]) => (
                             <RankingCard
                               key={field}
+                              {...rankingPagination(field)}
                               title={label}
                               entries={analysis.rankings[field] ?? []}
                               metric={metric}
@@ -1566,6 +1742,7 @@ export default function TrafficAnalysisWorkspace({
                       <>
                         <div className='grid gap-4 lg:grid-cols-2'>
                           <RankingCard
+                            {...rankingPagination('x-issue')}
                             title='Issue classes · a request may have several'
                             entries={
                               analysis.rankings['x-issue'] ?? []
@@ -1573,6 +1750,7 @@ export default function TrafficAnalysisWorkspace({
                             metric='requests'
                           />
                           <RankingCard
+                            {...rankingPagination('sc-filter-result')}
                             title='Filter results · not an error count'
                             entries={
                               analysis.rankings['sc-filter-result'] ??
@@ -1895,7 +2073,7 @@ function NetworkAnalysis({
             orientation='both'
             className='h-[clamp(280px,50dvh,600px)]'
           >
-            {selected && !busy ? (
+            {selected ? (
               <>
                 <table className='w-full min-w-[420px] text-left text-xs'>
                   <thead className='sticky top-0 bg-card'>
@@ -1986,12 +2164,23 @@ function RankingCard({
   title,
   entries,
   metric,
+  page,
+  total,
+  pageSize,
+  busy,
+  onPage,
 }: {
+  page: number;
+  total: number;
+  pageSize: number;
+  busy: boolean;
+  onPage: (page: number) => void;
   title: string;
   entries: CaptureRanking[];
   metric: 'requests' | 'bytes';
 }) {
   const maximum = Math.max(1, ...entries.map((entry) => entry.value));
+  const pages = Math.max(1, Math.ceil(total / pageSize));
   return (
     <Card className='gap-3 py-4'>
       <CardHeader className='px-4'>
@@ -2003,7 +2192,7 @@ function RankingCard({
             <div key={entry.name} className='space-y-1'>
               <div className='flex items-center justify-between gap-2 text-sm'>
                 <span className='min-w-0 truncate' title={entry.name}>
-                  {index + 1}. {entry.name}
+                  {(page - 1) * pageSize + index + 1}. {entry.name}
                 </span>
                 <span className='shrink-0 font-mono text-xs'>
                   {metric === 'bytes'
@@ -2029,6 +2218,27 @@ function RankingCard({
             No usable values in this selection.
           </p>
         )}
+        <div className='flex items-center justify-between gap-2 text-xs'>
+          <Button
+            variant='outline'
+            size='sm'
+            disabled={busy || page <= 1}
+            onClick={() => onPage(page - 1)}
+          >
+            Previous
+          </Button>
+          <span>
+            {page} / {pages} · {total.toLocaleString()} values
+          </span>
+          <Button
+            variant='outline'
+            size='sm'
+            disabled={busy || page >= pages}
+            onClick={() => onPage(page + 1)}
+          >
+            Next
+          </Button>
+        </div>
       </CardContent>
     </Card>
   );

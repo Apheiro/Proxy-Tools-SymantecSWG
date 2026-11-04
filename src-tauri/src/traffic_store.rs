@@ -516,6 +516,7 @@ pub struct TrafficQuery {
     pub page: usize,
     pub page_size: usize,
     pub limit: usize,
+    pub ranking_pages: HashMap<String, usize>,
     pub metric: String,
     pub network_prefix: Option<u8>,
     pub network: String,
@@ -560,6 +561,7 @@ pub struct NetworkRanking {
 pub struct TrafficQueryResult {
     summary: TrafficSummary,
     rankings: HashMap<String, Vec<Ranking>>,
+    ranking_counts: HashMap<String, usize>,
     network_rankings: Vec<NetworkRanking>,
     network_members: Vec<Ranking>,
     network_member_count: usize,
@@ -860,6 +862,7 @@ fn query_capture(
     summary.requests_per_second = summary.requests as f64 / duration;
     summary.bytes_per_second = summary.bytes as f64 / duration;
     let mut rankings: HashMap<String, Vec<Ranking>> = HashMap::new();
+    let mut ranking_counts: HashMap<String, usize> = HashMap::new();
     let mut options: HashMap<String, Vec<String>> = HashMap::new();
     let mut range_rankings: HashMap<String, Vec<(String, i64, i64)>> = HashMap::new();
     let top = query.limit.clamp(1, 50) as i64;
@@ -871,8 +874,16 @@ fn query_capture(
         } else {
             "requests"
         };
-        let sql = format!("WITH selected AS MATERIALIZED (SELECT r.id,r.bytes FROM records r WHERE {predicate}), counts AS (SELECT d.field,d.name,COUNT(*) AS requests,COALESCE(SUM(r.bytes),0) AS bytes FROM selected r JOIN dimensions d ON d.record_id=r.id GROUP BY d.field,d.name), ordered AS (SELECT *,ROW_NUMBER() OVER (PARTITION BY field ORDER BY {order} DESC,name) AS position FROM counts) SELECT field,name,requests,bytes FROM ordered WHERE position<=? ORDER BY field,position");
+        let sql = format!("WITH selected AS MATERIALIZED (SELECT r.id,r.bytes FROM records r WHERE {predicate}), counts AS (SELECT d.field,d.name,COUNT(*) AS requests,COALESCE(SUM(r.bytes),0) AS bytes FROM selected r JOIN dimensions d ON d.record_id=r.id GROUP BY d.field,d.name), ordered AS (SELECT *,ROW_NUMBER() OVER (PARTITION BY field ORDER BY {order} DESC,name) AS position,COUNT(*) OVER (PARTITION BY field) AS total FROM counts), paged AS (SELECT ordered.*,MAX(1,MIN(COALESCE(p.value,1),(total+?-1)/?)) AS page FROM ordered LEFT JOIN json_each(?) p ON p.key=ordered.field) SELECT field,name,requests,bytes,total FROM paged WHERE position>(page-1)*? AND position<=page*? ORDER BY field,position");
         let mut parameters = args.clone();
+        parameters.push(top.into());
+        parameters.push(top.into());
+        parameters.push(
+            serde_json::to_string(&query.ranking_pages)
+                .map_err(|e| e.to_string())?
+                .into(),
+        );
+        parameters.push(top.into());
         parameters.push(top.into());
         let mut statement = tx.prepare(&sql).map_err(|e| e.to_string())?;
         for row in statement
@@ -882,11 +893,15 @@ fn query_capture(
                     r.get::<_, String>(1)?,
                     r.get::<_, i64>(2)?,
                     r.get::<_, i64>(3)?,
+                    r.get::<_, i64>(4)?,
                 ))
             })
             .map_err(|e| e.to_string())?
         {
-            let (field, name, requests, bytes) = row.map_err(|e| e.to_string())?;
+            let (field, name, requests, bytes, total) = row.map_err(|e| e.to_string())?;
+            let total = usize::try_from(total)
+                .map_err(|e| format!("Invalid ranking count for {field}: {total} ({e})"))?;
+            ranking_counts.insert(field.clone(), total);
             range_rankings
                 .entry(field)
                 .or_default()
@@ -910,10 +925,28 @@ fn query_capture(
         let by_bytes = query.metric == "bytes" && field != "x-issue";
         let metric = if by_bytes { "bytes" } else { "requests" };
         let rows = if global {
-            let sql=format!("SELECT name,requests,bytes FROM counters WHERE field=? ORDER BY {metric} DESC,name LIMIT ?");
+            let count: i64 = tx
+                .query_row(
+                    "SELECT COALESCE((SELECT unique_values FROM counter_fields WHERE field=?),0)",
+                    [field],
+                    |r| r.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            let count = usize::try_from(count)
+                .map_err(|e| format!("Invalid ranking count for {field}: {count} ({e})"))?;
+            ranking_counts.insert(field.to_owned(), count);
+            let page = query
+                .ranking_pages
+                .get(field)
+                .copied()
+                .unwrap_or(1)
+                .max(1)
+                .min(count.div_ceil(top as usize).max(1));
+            let offset = (page - 1) * top as usize;
+            let sql=format!("SELECT name,requests,bytes FROM counters WHERE field=? ORDER BY {metric} DESC,name LIMIT ? OFFSET ?");
             let mut statement = tx.prepare(&sql).map_err(|e| e.to_string())?;
             let result = statement
-                .query_map(params![field, top], |r| {
+                .query_map(params![field, top, offset as i64], |r| {
                     Ok((
                         r.get::<_, String>(0)?,
                         r.get::<_, i64>(1)?,
@@ -998,6 +1031,7 @@ fn query_capture(
         network_count,
         summary,
         rankings,
+        ranking_counts,
         timeline,
         records: Vec::new(),
         page: 1,

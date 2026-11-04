@@ -51,6 +51,7 @@ export type CaptureResult = {
     bytesPerSecond: number;
   };
   rankings: Record<string, CaptureRanking[]>;
+  rankingCounts?: Record<string, number>;
   networkRankings?: {
     name: string;
     requests: number;
