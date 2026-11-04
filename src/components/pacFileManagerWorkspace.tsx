@@ -23,6 +23,8 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import PacComparator from '@/components/pacComparator';
+import PacFileInventory from '@/components/pacFileInventory';
+import PacRawText from '@/components/pacRawText';
 import RegisterSourceForm from '@/components/registerSourceForm';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -57,6 +59,7 @@ import {
   rulesEqual,
   urlMatches,
 } from '@/lib/pac';
+import { normalizeProxyTags } from '@/lib/proxyTags';
 import { getLocalStorage, postLocalStorage } from '@/lib/utilsClient';
 
 const STORAGE_KEY = 'pac-sources';
@@ -253,6 +256,10 @@ export default function PacFileManagerWorkspace({
   const [managerView, setManagerView] = useState<
     'sources' | 'compare'
   >('sources');
+  const [comparatorRequest, setComparatorRequest] = useState({
+    sourceId: '',
+    revision: 0,
+  });
   const [loading, setLoading] = useState(false);
   const [testUrl, setTestUrl] = useState('');
   const [testInput, setTestInput] = useState('');
@@ -392,7 +399,11 @@ export default function PacFileManagerWorkspace({
 
   const updateSource = (source: PacSource) =>
     setSources((current) =>
-      current.map((item) => (item.id === source.id ? source : item)),
+      current.map((item) =>
+        item.id === source.id
+          ? { ...source, tags: item.tags }
+          : item,
+      ),
     );
   const setSourceRules = (source: PacSource, rules: PacRule[]) => {
     const changed =
@@ -819,9 +830,9 @@ export default function PacFileManagerWorkspace({
       return;
     }
     const content = selected.parseError
-      ? selected.remoteContent
+      ? selected.localContent ?? selected.remoteContent
       : generatePac(selected);
-    if (!content) {
+    if (content === undefined) {
       toast.error('There is no PAC content to export.');
       return;
     }
@@ -897,6 +908,38 @@ export default function PacFileManagerWorkspace({
     return issues;
   };
 
+  const saveRawResult = (filename: string, content: string) => {
+    if (!loadedSources) {
+      toast.error(
+        'PAC source storage is not available. Download the result to keep a copy.',
+      );
+      return false;
+    }
+    const source: PacSource = {
+      id: crypto.randomUUID(),
+      name: filename,
+      url: '',
+      localContent: content,
+      rules: [],
+      baseRules: [],
+      tags: [],
+      status: 'local-changes',
+      parseError:
+        'This independent file preserves raw merged text. Use WPAD Comparator to review or merge it; download the original text to deploy it.',
+    };
+    try {
+      const updated = [...sources, source];
+      postLocalStorage(STORAGE_KEY, updated);
+      setSources(updated);
+      return true;
+    } catch (error) {
+      toast.error(
+        `Could not save the new file: ${String(error)}. Download the result to keep a copy.`,
+      );
+      return false;
+    }
+  };
+
   return (
     <div className={`flex min-w-0 flex-col ${mode === 'manage' ? 'gap-6' : 'gap-4'}`}>
       {storageError && (
@@ -917,7 +960,7 @@ export default function PacFileManagerWorkspace({
             variant={managerView === 'compare' ? 'default' : 'outline'}
             onClick={() => setManagerView('compare')}
           >
-            Comparador de WPAD
+            WPAD Comparator
           </Button>
         </nav>
       )}
@@ -962,39 +1005,38 @@ export default function PacFileManagerWorkspace({
         </>
       )}
 
-      {mode === 'manage' ? (managerView === 'compare' ? <PacComparator sources={sources} /> : (
-        <section className='flex min-w-0 flex-col gap-4'>
-          <div className='flex items-center justify-between gap-3'>
-            <div>
-              <h2 className='text-lg font-semibold'>PAC sources</h2>
-              <p className='text-sm text-muted-foreground'>Manage sources and open a PAC to edit its routing rules.</p>
-            </div>
-            <Badge variant='secondary'>{sources.length} sources</Badge>
-          </div>
-          {sources.length === 0 ? (
-            <Card className='flex min-h-60 items-center justify-center'>
-              <div className='px-6 text-center'><FileCode2 className='mx-auto size-9 text-muted-foreground' /><p className='mt-3 font-medium'>No PAC sources yet</p><p className='mt-1 text-sm text-muted-foreground'>Add a remote source or create a PAC file from scratch.</p></div>
-            </Card>
-          ) : (
-            <div className='grid gap-3 xl:grid-cols-2'>
-              {sources.map((source) => (
-                <Card key={source.id}>
-                  <CardContent className='flex flex-col gap-4 p-4'>
-                    <div className='flex items-start justify-between gap-3'>
-                      <div className='min-w-0'><h3 className='truncate font-medium'>{source.name}</h3><p className='mt-1 truncate text-sm text-muted-foreground'>{source.url || 'Local source'}</p><p className='mt-2 text-xs text-muted-foreground'>{source.rules.length} rules · {source.lastSyncedAt ? `Synced ${new Date(source.lastSyncedAt).toLocaleString()}` : 'Not synced'}</p></div>
-                      <Badge variant={statusVariant[source.status]}>{statusText[source.status]}</Badge>
-                    </div>
-                    <div className='flex flex-wrap justify-end gap-2'>
-                      {source.url && <Button variant='outline' size='sm' disabled={loading} onClick={() => synchronize(source)}><RefreshCcw className='size-4' />Sync</Button>}
-                      <Button size='sm' onClick={() => router.push(`/pac/editor?sourceId=${encodeURIComponent(source.id)}`)}><Pencil className='size-4' />Edit source</Button>
-                      <Button variant='ghost' size='icon' aria-label={`Delete ${source.name}`} onClick={() => removeSource(source)}><Trash2 className='size-4' /></Button>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          )}
-        </section>
+      {mode === 'manage' && (
+        <div hidden={managerView !== 'compare'}>
+          <PacComparator
+            sources={sources}
+            onSaveResult={saveRawResult}
+            initialReferenceId={comparatorRequest.sourceId}
+            referenceRequest={comparatorRequest.revision}
+          />
+        </div>
+      )}
+      {mode === 'manage' ? (managerView === 'sources' && (
+        <PacFileInventory
+          sources={sources}
+          loading={loading}
+          onSync={synchronize}
+          onEdit={(source) => router.push(`/pac/editor?sourceId=${encodeURIComponent(source.id)}`)}
+          onDelete={removeSource}
+          onCompare={(source) => {
+            setComparatorRequest((current) => ({
+              sourceId: source.id,
+              revision: current.revision + 1,
+            }));
+            setManagerView('compare');
+          }}
+          onTagsChange={(source, tags) =>
+            setSources((current) => current.map((item) =>
+              item.id === source.id
+                ? { ...item, tags: normalizeProxyTags(tags) }
+                : item,
+            ))
+          }
+        />
       )) : !selected ? (
         <Card className='flex min-h-80 items-center justify-center'>
           <div className='max-w-md px-6 text-center'>
@@ -1052,7 +1094,8 @@ export default function PacFileManagerWorkspace({
                   variant='outline'
                   onClick={exportPac}
                   disabled={
-                    !selected.remoteContent &&
+                    selected.localContent === undefined &&
+                    selected.remoteContent === undefined &&
                     (!selected.rules.length ||
                       Boolean(selected.parseError))
                   }
@@ -1077,7 +1120,7 @@ export default function PacFileManagerWorkspace({
             <CardContent className='grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(220px,0.7fr)_auto] lg:items-end'>
               <div className='space-y-2'><label htmlFor='pac-test-url' className='text-sm font-medium'>Test URL against routing rules</label><div className='flex gap-2'><Input id='pac-test-url' placeholder='https://www.example.com/resource' value={testInput} onChange={(event) => setTestInput(event.target.value)} /><Button variant='outline' disabled={!testInput || Boolean(selected.parseError)} onClick={() => setTestUrl(testInput)}><Check className='size-4' />Evaluate</Button></div></div>
               <div className='space-y-2'><p className='text-sm font-medium'>Publishing</p><p className='text-xs text-muted-foreground'>Remote sources are read-only. Export the generated file and publish it using your server’s approved process.</p></div>
-              <div className='flex flex-wrap gap-2 lg:justify-end'><Button variant='outline' onClick={() => setPreviewOpen(true)} disabled={Boolean(selected.parseError) && !selected.remoteContent}><FileCode2 className='size-4' />{selected.parseError ? 'View original PAC' : 'Preview PAC'}</Button><Button variant='outline' onClick={exportPac}><Download className='size-4' />Export PAC</Button></div>
+              <div className='flex flex-wrap gap-2 lg:justify-end'><Button variant='outline' onClick={() => setPreviewOpen(true)} disabled={Boolean(selected.parseError) && selected.localContent === undefined && selected.remoteContent === undefined}><FileCode2 className='size-4' />{selected.parseError ? 'View original PAC' : 'Preview PAC'}</Button><Button variant='outline' onClick={exportPac}><Download className='size-4' />Export PAC</Button></div>
               {testUrl && <div className='rounded-md bg-muted p-3 text-sm lg:col-span-3'>{selected.parseError ? <span className='text-amber-600'>Not evaluated: this PAC contains logic outside the visual editor.</span> : preview.uncertain ? <span className='text-amber-700'>Preview is uncertain because an earlier condition needs DNS resolution or PAC runtime evaluation.</span> : matchedRule ? <>Matched <strong>{labelCondition(matchedRule.condition)}: {matchedRule.condition.value || 'default rule'}</strong> · destination <strong>{displayDestination(matchedRule.destination, proxies)}{(matchedRule.fallbacks?.length ?? 0) > 0 ? `; ${matchedRule.fallbacks?.map((destination) => displayDestination(destination, proxies)).join('; ')}` : ''}</strong></> : 'No rules matched, and no default rule is configured.'}</div>}
             </CardContent>
           </Card>
@@ -1087,18 +1130,20 @@ export default function PacFileManagerWorkspace({
                 <DialogTitle>{selected.parseError ? 'Original PAC content' : 'Generated PAC preview'}</DialogTitle>
                 <DialogDescription>
                   {selected.parseError
-                    ? 'Full downloaded source, available for reading and copying only.'
+                    ? 'Complete original text, available for reading and copying only.'
                     : 'Review the PAC code generated from this source’s visual rules.'}
                 </DialogDescription>
               </DialogHeader>
               {!selected.parseError && validateSource(selected).length > 0 && <p className='text-sm text-destructive'>{validateSource(selected)[0]}</p>}
-              <pre tabIndex={0} aria-label='PAC source code' className='min-w-0 max-h-[65dvh] overflow-auto rounded-md bg-muted p-4 text-xs select-text'>
-                {selected.parseError
-                  ? selected.remoteContent
+              <PacRawText
+                text={selected.parseError
+                  ? selected.localContent ?? selected.remoteContent ?? ''
                   : validateSource(selected).length
                     ? 'Fix the validation errors to generate a preview.'
                     : generatePac(selected)}
-              </pre>
+                label='PAC source code'
+                className='h-[60dvh]'
+              />
             </DialogContent>
           </Dialog>
 
@@ -1139,7 +1184,7 @@ export default function PacFileManagerWorkspace({
             <Card className='border-amber-500/40'>
               <CardContent className='p-4 text-sm'>
                 <p className='font-medium'>
-                  The downloaded content is kept read-only.
+                  {selected.localContent !== undefined ? 'This independent raw file is kept intact.' : 'The downloaded content is kept read-only.'}
                 </p>
                 <p className='mt-1 text-muted-foreground'>
                   {selected.parseError} You can inspect and download

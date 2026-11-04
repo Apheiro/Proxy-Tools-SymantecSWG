@@ -10,6 +10,7 @@ export function downloadedText(
   source: PacSource,
 ): string | undefined {
   const content =
+    source.localContent ??
     source.downloadedContent ??
     source.pendingContent ??
     source.remoteContent;

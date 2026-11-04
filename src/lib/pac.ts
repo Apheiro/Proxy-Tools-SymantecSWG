@@ -43,6 +43,9 @@ export type PacGroup = {
   name: string;
 };
 export type PacSource = {
+  tags?: string[];
+  /** Independent raw result created in WPAD Comparator. */
+  localContent?: string;
   id: string;
   name: string;
   url: string;
