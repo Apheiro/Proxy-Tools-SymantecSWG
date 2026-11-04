@@ -106,6 +106,9 @@ export default function TrafficAnalysisWorkspace({
 }) {
   const capture = useTrafficCapture();
   const workersId = useId();
+  const periodId = useId();
+  const startingDayId = useId();
+  const networkPrefixId = useId();
   const accessLogId = useId();
   const timeZoneId = useId();
   const rangeControlsId = useId();
@@ -271,6 +274,9 @@ export default function TrafficAnalysisWorkspace({
       page,
       pageSize,
       errorsOnly: tab === 'Errors & Security',
+      compactRecords: true,
+      omitRecords:
+        tab !== 'Errors & Security' && tab !== 'Fields & Records',
       limit,
       rankingPages,
       metric,
@@ -306,13 +312,15 @@ export default function TrafficAnalysisWorkspace({
     if (!captureId) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
+    let requestId = '';
     setQueryError('');
     const run = async () => {
       setQueryBusy(true);
       try {
+        requestId = crypto.randomUUID();
         const result = await invoke<CaptureResult>(
           'query_traffic_capture',
-          { captureId, query: JSON.parse(queryKey) },
+          { captureId, query: JSON.parse(queryKey), requestId },
         );
         if (!cancelled) {
           setAnalysis(result);
@@ -358,6 +366,10 @@ export default function TrafficAnalysisWorkspace({
     return () => {
       cancelled = true;
       clearTimeout(timer);
+      if (requestId)
+        void invoke('cancel_traffic_query', { requestId }).catch(
+          () => {},
+        );
     };
   }, [captureId, queryKey, active, capture.busy, stream?.status]);
 
@@ -1169,10 +1181,14 @@ export default function TrafficAnalysisWorkspace({
                 <CardContent className='space-y-2 px-4'>
                   {!!availableDays.length && (
                     <div className='flex flex-wrap items-end gap-2 pb-2'>
-                      <label className='space-y-1 text-xs text-muted-foreground'>
+                      <label
+                        htmlFor={periodId}
+                        className='space-y-1 text-xs text-muted-foreground'
+                      >
                         Period
                         <SelectField
                           value={dayStart ? 'day' : 'all'}
+                          id={periodId}
                           aria-label='Analysis period'
                           onValueChange={(value) =>
                             value === 'all'
@@ -1196,10 +1212,14 @@ export default function TrafficAnalysisWorkspace({
                           >
                             Previous
                           </Button>
-                          <label className='space-y-1 text-xs text-muted-foreground'>
+                          <label
+                            htmlFor={startingDayId}
+                            className='space-y-1 text-xs text-muted-foreground'
+                          >
                             Starting day ({zone})
                             <SelectField
                               value={dayStart}
+                              id={startingDayId}
                               aria-label='Starting day'
                               onValueChange={setDayStart}
                             >
@@ -1682,9 +1702,13 @@ export default function TrafficAnalysisWorkspace({
                               limited to the ranking Top.
                             </p>
                           </div>
-                          <label className='flex items-center gap-2 text-sm'>
+                          <label
+                            htmlFor={networkPrefixId}
+                            className='flex items-center gap-2 text-sm'
+                          >
                             IPv4 prefix
                             <SelectField
+                              id={networkPrefixId}
                               aria-label='IPv4 network prefix'
                               value={String(networkPrefix)}
                               onValueChange={(value) =>
@@ -1782,6 +1806,7 @@ export default function TrafficAnalysisWorkspace({
                           <CardContent>
                             <RecordTable
                               records={rows}
+                              captureId={captureId}
                               formatTime={formatTime}
                               offset={
                                 (analysis.page - 1) *
@@ -1815,6 +1840,7 @@ export default function TrafficAnalysisWorkspace({
                           <CardContent>
                             <RecordTable
                               records={rows}
+                              captureId={captureId}
                               formatTime={formatTime}
                               offset={
                                 (analysis.page - 1) *
@@ -2120,14 +2146,11 @@ function NetworkAnalysis({
                 )}
               </>
             ) : (
-              <p
-                role='status'
-                className='p-4 text-sm text-muted-foreground'
-              >
+              <output className='block p-4 text-sm text-muted-foreground'>
                 {busy
                   ? 'Updating network analysis…'
                   : 'Choose a network from the list.'}
-              </p>
+              </output>
             )}
           </ScrollArea>
           {selected && (
@@ -2244,11 +2267,85 @@ function RankingCard({
   );
 }
 
+function RecordDetail({
+  captureId,
+  record,
+}: {
+  captureId: string;
+  record: TrafficRecord;
+}) {
+  const [open, setOpen] = useState(false);
+  const [detail, setDetail] = useState<TrafficRecord | null>(null);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    if (!open || detail) return;
+    let cancelled = false;
+    setError('');
+    if (record.storeId == null) {
+      setDetail(record);
+      return;
+    }
+    void invoke<TrafficRecord>('get_traffic_record', {
+      captureId,
+      recordId: record.storeId,
+    })
+      .then((value) => {
+        if (!cancelled) setDetail(value);
+      })
+      .catch((reason) => {
+        if (!cancelled) setError(String(reason));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, detail, captureId, record.storeId, record.id]);
+  return (
+    <details
+      className='mt-1'
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary className='cursor-pointer text-primary'>
+        Raw &amp; normalized fields
+      </summary>
+      {open &&
+        (error ? (
+          <p role='alert'>{error}</p>
+        ) : !detail ? (
+          <p>Loading record…</p>
+        ) : (
+          <ScrollArea className='mt-2 h-64 max-w-xl rounded border p-2'>
+            <p className='mb-2 font-mono'>{detail.id}</p>
+            <p>
+              {detail.rawLineReconstructed
+                ? 'Reconstructed ELFF line · original token spelling preserved; spacing may differ.'
+                : 'Stored source line'}
+            </p>
+            <pre className='whitespace-pre-wrap break-all'>
+              {detail.rawLine}
+            </pre>
+            <pre className='mt-3 whitespace-pre-wrap break-all'>
+              {JSON.stringify(
+                {
+                  raw: detail.rawFields,
+                  normalized: detail.normalized,
+                },
+                null,
+                2,
+              )}
+            </pre>
+          </ScrollArea>
+        ))}
+    </details>
+  );
+}
+
 function RecordTable({
+  captureId,
   records,
   formatTime,
   offset,
 }: {
+  captureId: string;
   records: TrafficRecord[];
   formatTime: (time: string | null | number) => string;
   offset: number;
@@ -2311,27 +2408,11 @@ function RecordTable({
                 <p>
                   {record.issues?.join(' · ') || 'No detected issue'}
                 </p>
-                <details className='mt-1'>
-                  <summary className='cursor-pointer text-primary'>
-                    Raw &amp; normalized fields
-                  </summary>
-                  <ScrollArea className='mt-2 h-64 max-w-xl rounded border p-2'>
-                    <p className='mb-2 font-mono'>{record.id}</p>
-                    <pre className='whitespace-pre-wrap break-all'>
-                      {record.rawLine}
-                    </pre>
-                    <pre className='mt-3 whitespace-pre-wrap break-all'>
-                      {JSON.stringify(
-                        {
-                          raw: record.rawFields,
-                          normalized: record.normalized,
-                        },
-                        null,
-                        2,
-                      )}
-                    </pre>
-                  </ScrollArea>
-                </details>
+                <RecordDetail
+                  key={`${captureId}:${record.storeId ?? record.id}`}
+                  captureId={captureId}
+                  record={record}
+                />
               </td>
             </tr>
           ))}

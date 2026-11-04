@@ -179,6 +179,7 @@ export const documentationTopics: Record<DocumentationSlug, Topic> = {
         title: 'Schema, raw data and availability',
         paragraphs: [
           '#Fields is authoritative: every value maps to its declared field name, respecting quotes. Unknown fields are preserved. Main and SSL schemas may differ or change during the capture. Raw fields and independent normalized fields remain available together.',
+          'Record details load when opened. New captures preserve original token spelling and the active schema; the displayed reconstructed line may use different spacing and does not reproduce the original file headers or line endings. Malformed or ambiguous lines retain their stored source line. Older saved captures remain readable without automatic conversion.',
           'A token-count mismatch marks the row malformed and records expected/received counts, source, raw line and error type. Following rows continue processing; missing values are not shifted into invented positions. Without a schema, lines produce diagnostics rather than invented records.',
           'Raw -, *, None, unavailable and empty values remain distinct. Field availability reports whether a field is absent, present without useful data, or populated. The coverage table describes the entire capture, independent of time filters. Empty rankings indicate unavailable usable values, not an invented zero-valued category.',
         ],
@@ -188,7 +189,7 @@ export const documentationTopics: Record<DocumentationSlug, Topic> = {
         title: 'Complete capture, time range and counters',
         paragraphs: [
           'Each ingestion transaction writes every parsed record, updates global request/byte counters and dimension rankings, and persists minute timeline buckets in a local SQLite capture. Global analytics read those counters instead of recounting raw records. There is no 5,000-record analytical retain limit.',
-          'A selected range or additional filters query indexed timestamps and typed columns in the complete capture. These queries aggregate the matching rows; they do not reread the original file or reparse ELFF. A bounded, revision-aware cache reuses range analytics across pagination and invalidates when ingestion changes the capture. During ingestion, “entire capture” means everything processed so far.',
+          'A selected range or additional filters query indexed timestamps and typed columns in the complete capture. These queries aggregate the matching rows without rereading the original file. Text search examines the stored values; wide searches can require a complete scan. A bounded, revision-aware cache reuses range analytics across pagination and invalidates when ingestion changes the capture. During ingestion, “entire capture” means everything processed so far.',
           'Changing a range, filter or analytical view immediately shows a calculation indicator. Existing statistics and record pages remain visible with a subtle opacity transition and a bottom notification until the new selection finishes. They still represent the previous completed query while the update indicator is visible. First-time queries show a placeholder only when no prior analysis exists for that capture. Wide ranges and compound filters can take longer because they aggregate indexed records; stored timestamps retain exact record-level temporal precision.',
           'The timeline appears above every view, including Errors & Security and Fields & Records. Request-density colors identify quiet and busy intervals. Use its slider or click a density cell to select a range. Expand Range at the bottom right of Capture Timeline for exact inclusive UTC bounds and recent-period presets. Filters has its own card below the timeline and expands independently from its full header; Clear filters does not toggle it. The UTC Time Zone card sits beside the capture source controls. Collapsing Range or Filters keeps all selections applied. Recent presets count back from the last captured minute. Records without a valid timestamp count in All time but cannot match a bounded time range.',
           'Apache ECharts runs through echarts-for-react, loaded only in the browser. The Overview uses columns for requests or bytes over time, with the application’s theme colors and a fixed 4 px gap. Columns fill the available plot width; bucket count adapts on resize, up to 120 equal-duration buckets, while quiet intervals keep their time slots. The full-capture navigator uses up to 160 request-density cells: actual observed minimum is light gray (#dddddd), arithmetic midpoint yellow, and maximum dark red, with linear interpolation. Inserted quiet intervals remain light gray and do not force the observed minimum to zero; constant data stays light gray and is labeled “No variation.” The density strip is 22.5 px high, and its white range selector is 11 px high. Tooltips show exact bucket counts and time spans. These display buckets do not reduce the accuracy of native range queries. Display time zone changes labels only; stored timestamps and entered bounds remain UTC.',
@@ -329,12 +330,37 @@ export const documentationTopics: Record<DocumentationSlug, Topic> = {
   },
   policy: {
     title: 'Local Policy Manager',
-    description: 'Independent central-file editing and direct CPL distribution over SSH.',
+    description:
+      'Independent central-file editing and direct CPL distribution over SSH.',
     sections: [
-      { id: 'methods', title: 'Choose a source', paragraphs: ['Open /policy from the workspace switcher. Direct editing uses the existing appliance inventory and credentials. Central SSH file editing is disabled by default; enable and configure its server, absolute path, POSIX/PowerShell shell and separate password in Settings. Enabling central editing makes it the preferred method without disabling direct operations. Central file distribution remains external to this app.'] },
-      { id: 'inspection', title: 'Inspect before distribution', paragraphs: ['Inspect all configured proxies, then select a readable reference. A strict majority is only a comparison baseline, not automatically trusted policy. Red discrepancies, unreadable sources and unreachable proxies are excluded from bulk selection. Compare sources before editing. Explicit reference override chooses another proxy source; individual replacement is a separate confirmation for one excluded, readable proxy.'] },
-      { id: 'replace', title: 'Review complete replacements', paragraphs: ['The visual editor is the default, with full-width rules and reusable condition/action objects below proxy inspection. Rules and object lists are virtualized. Optional CPL source mode shares the same draft and warns that manual edits may diverge from visually generated structure. Comments and unknown CPL are retained. Gesture suggestions and imported/custom expressions are available; this is not a complete version-specific SGOS catalogue. Structural checks do not replace the SGOS compiler. Review the diff and destinations before confirmation. The native service rechecks the complete census and each destination before inline replacement, then requires compiler success and matching readback. Concurrent changes abort pending work. Successful targets are not rolled back if later targets fail. The CLI cannot offer atomic compare-and-swap against another administrator.'] },
-      { id: 'files', title: 'Central files and development', paragraphs: ['Central files are edited using SSH scripts, without SFTP. Saves take a remote advisory lock, compare original bytes, replace atomically and verify readback. POSIX requires standard file/base64 utilities; Windows requires PowerShell and a filesystem supporting File.Replace. Live passwords use Windows Credential Manager; Mock central passwords use a separate localStorage entry. All Mock SSH targets are forced to localhost:2222. The appliance dummy must support source reads, arbitrary inline delimiters and readback. CPL cannot reconstruct VPM XML projects.'] },
+      {
+        id: 'methods',
+        title: 'Choose a source',
+        paragraphs: [
+          'Open /policy from the workspace switcher. Direct editing uses the existing appliance inventory and credentials. Central SSH file editing is disabled by default; enable and configure its server, absolute path, POSIX/PowerShell shell and separate password in Settings. Enabling central editing makes it the preferred method without disabling direct operations. Central file distribution remains external to this app.',
+        ],
+      },
+      {
+        id: 'inspection',
+        title: 'Inspect before distribution',
+        paragraphs: [
+          'Inspect all configured proxies, then select a readable reference. A strict majority is only a comparison baseline, not automatically trusted policy. Red discrepancies, unreadable sources and unreachable proxies are excluded from bulk selection. Compare sources before editing. Explicit reference override chooses another proxy source; individual replacement is a separate confirmation for one excluded, readable proxy.',
+        ],
+      },
+      {
+        id: 'replace',
+        title: 'Review complete replacements',
+        paragraphs: [
+          'The visual editor is the default, with full-width rules and reusable condition/action objects below proxy inspection. Rules and object lists are virtualized. Optional CPL source mode shares the same draft and warns that manual edits may diverge from visually generated structure. Comments and unknown CPL are retained. Gesture suggestions and imported/custom expressions are available; this is not a complete version-specific SGOS catalogue. Structural checks do not replace the SGOS compiler. Review the diff and destinations before confirmation. The native service rechecks the complete census and each destination before inline replacement, then requires compiler success and matching readback. Concurrent changes abort pending work. Successful targets are not rolled back if later targets fail. The CLI cannot offer atomic compare-and-swap against another administrator.',
+        ],
+      },
+      {
+        id: 'files',
+        title: 'Central files and development',
+        paragraphs: [
+          'Central files are edited using SSH scripts, without SFTP. Saves take a remote advisory lock, compare original bytes, replace atomically and verify readback. POSIX requires standard file/base64 utilities; Windows requires PowerShell and a filesystem supporting File.Replace. Live passwords use Windows Credential Manager; Mock central passwords use a separate localStorage entry. All Mock SSH targets are forced to localhost:2222. The appliance dummy must support source reads, arbitrary inline delimiters and readback. CPL cannot reconstruct VPM XML projects.',
+        ],
+      },
     ],
   },
   settings: {

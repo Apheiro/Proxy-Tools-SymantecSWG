@@ -171,6 +171,7 @@ export async function collectTrafficReport(
     end: null,
     page: 1,
     pageSize: 1,
+    omitRecords: true,
     errorsOnly: false,
     limit: 10,
     metric: 'requests' as const,

@@ -4,6 +4,8 @@ export type LogValue = {
   availability: string;
 };
 export type TrafficRecord = {
+  storeId?: number;
+  rawLineReconstructed?: boolean;
   issues?: string[];
   id: string;
   source: string;
