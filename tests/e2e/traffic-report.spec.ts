@@ -1,6 +1,10 @@
 import { expect, test } from '@playwright/test';
+import { installStaticTrafficSite } from '../fixtures/staticTrafficSite';
 import { readFile, writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
+test.beforeEach(async ({ page }) => {
+  await installStaticTrafficSite(page);
+});
 for (const native of [false, true]) {
   for (const theme of ['light', 'dark'] as const) {
     test(`traffic PDF exports all aggregates and peak details using the ${theme} app theme (${native ? 'Tauri' : 'browser'})`, async ({
