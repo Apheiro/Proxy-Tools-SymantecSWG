@@ -710,6 +710,7 @@ mod tests {
             group_id: "embedded-1".into(),
             loading: false,
             loaded: true,
+            form_login_attempts: 0,
             auth: Some((
                 "fixture-user".into(),
                 "fixture-password".into(),
