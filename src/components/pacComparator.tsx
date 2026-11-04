@@ -111,6 +111,8 @@ export default function PacComparator({
     conflicts: number;
   } | null>(null);
   const [resetOpen, setResetOpen] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const downloadPending = useRef(false);
   const viewport = useRef<HTMLDivElement>(null);
   const blockRefs = useRef<(HTMLDivElement | null)[]>([]);
   const available = sources.filter(
@@ -309,6 +311,22 @@ export default function PacComparator({
         history: current.history.slice(0, -1),
       };
     });
+  const downloadResult = async () => {
+    if (
+      downloadPending.current ||
+      result === undefined ||
+      !draft?.filename.trim()
+    )
+      return;
+    downloadPending.current = true;
+    setDownloading(true);
+    try {
+      await downloadRawPac(draft.filename.trim(), result);
+    } finally {
+      downloadPending.current = false;
+      setDownloading(false);
+    }
+  };
   const reset = () => {
     if (!reference) return;
     try {
@@ -917,14 +935,14 @@ export default function PacComparator({
                 variant='outline'
                 className='w-full'
                 disabled={
-                  result === undefined || !draft?.filename.trim()
+                  downloading ||
+                  result === undefined ||
+                  !draft?.filename.trim()
                 }
-                onClick={() =>
-                  downloadRawPac(draft.filename.trim(), result)
-                }
+                onClick={downloadResult}
               >
                 <Download className='size-4' />
-                Download result
+                {downloading ? 'Saving result…' : 'Download result'}
               </Button>
             </div>
             <p className='text-[11px] leading-relaxed text-muted-foreground'>

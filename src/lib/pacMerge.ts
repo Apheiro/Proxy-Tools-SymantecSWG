@@ -1,3 +1,5 @@
+import { invoke, isTauri } from '@tauri-apps/api/core';
+import { toast } from 'sonner';
 import type { TextBlock } from './pacTextDiff';
 
 export type RawEdit = {
@@ -55,17 +57,116 @@ export function mergeResult(base: string, edits: RawEdit[]) {
   return result + base.slice(cursor);
 }
 
-export function downloadRawPac(filename: string, content: string) {
-  // Blob's default endings:'transparent' retains CRLF/LF/CR and the BOM.
-  const blob = new Blob([content], {
-    type: 'application/x-ns-proxy-autoconfig',
-  });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = /\.(pac|dat)$/i.test(filename)
-    ? filename
-    : `${filename}.pac`;
-  anchor.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+const pendingDownloads = new Map<string, Promise<void>>();
+
+function browserFilename(input: string) {
+  const cleaned = input
+    .trim()
+    .replace(/[^a-zA-Z0-9_.-]/g, '-')
+    .replace(/^[.-]+|[.-]+$/g, '');
+  const match = /^(.*)\.(pac|dat)$/i.exec(cleaned);
+  let stem =
+    (match ? match[1] : cleaned)
+      .replace(/^[.-]+|[.-]+$/g, '')
+      .slice(0, 100) || 'wpad';
+  if (/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)/i.test(stem))
+    stem = `wpad-${stem}`;
+  return `${stem}.${match ? match[2].toLowerCase() : 'pac'}`;
+}
+
+/** Shared by original-file and merged-result exports; never claim an unconfirmed disk write. */
+export function downloadRawPac(
+  filename: string,
+  content: string,
+): Promise<void> {
+  const key = JSON.stringify([filename, content]);
+  const existing = pendingDownloads.get(key);
+  if (existing) return existing;
+  const request = (async () => {
+    let notice: string | number | undefined;
+    try {
+      const native = isTauri();
+      notice = toast.loading(
+        native
+          ? 'Saving PAC/WPAD to Downloads…'
+          : 'Preparing browser download…',
+      );
+      if (typeof content !== 'string')
+        throw new Error(
+          'Original text is unavailable. Synchronize this source first.',
+        );
+      if (native) {
+        const saved = await invoke<{
+          filename: string;
+          path: string;
+        }>('save_pac_text', { filename, content });
+        if (
+          !saved ||
+          typeof saved.path !== 'string' ||
+          !saved.path ||
+          typeof saved.filename !== 'string' ||
+          !saved.filename
+        )
+          throw new Error(
+            'The native save command did not confirm a saved file.',
+          );
+        toast.success('PAC/WPAD saved.', {
+          id: notice,
+          description: saved.path,
+          duration: 15000,
+          action: {
+            label: 'Open folder',
+            onClick: () => {
+              void invoke('reveal_pac_export', {
+                filename: saved.filename,
+              }).catch((error) =>
+                toast.error(
+                  `The file was saved, but its folder could not be opened: ${String(error)}`,
+                  { description: saved.path },
+                ),
+              );
+            },
+          },
+        });
+      } else {
+        const blob = new Blob([content], {
+          type: 'application/x-ns-proxy-autoconfig',
+          endings: 'transparent',
+        });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        try {
+          anchor.href = url;
+          anchor.download = browserFilename(filename);
+          anchor.hidden = true;
+          document.body.appendChild(anchor);
+          anchor.click();
+        } finally {
+          anchor.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 60000);
+        }
+        toast.message('Browser download requested.', {
+          id: notice,
+          description:
+            'Your browser manages the destination and any save or cancel prompt. ProxyTools cannot confirm the saved path or completion.',
+          duration: 15000,
+        });
+      }
+    } catch (error) {
+      toast.error(`Could not download PAC/WPAD: ${String(error)}`, {
+        id: notice,
+        duration: 15000,
+      });
+    }
+  })();
+  pendingDownloads.set(key, request);
+  // Share an in-flight write across duplicate cards, then suppress immediate double-clicks.
+  const release = () => {
+    setTimeout(() => {
+      if (pendingDownloads.get(key) === request)
+        pendingDownloads.delete(key);
+    }, 1000);
+  };
+  void request.then(release, release);
+  return request;
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   Download,
   FileCode2,
@@ -37,6 +37,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import { useAppPreferences } from '@/lib/appPreferences';
 import type { PacSource } from '@/lib/pac';
 import { downloadedText } from '@/lib/pacTextDiff';
 import { downloadRawPac } from '@/lib/pacMerge';
@@ -70,6 +71,9 @@ export default function PacFileCard({
   onTagsChange: (tags: string[]) => void;
   onCompare: () => void;
 }) {
+  const preferences = useAppPreferences();
+  const downloadPending = useRef(false);
+  const [downloading, setDownloading] = useState(false);
   const [tagsOpen, setTagsOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const hasRaw =
@@ -78,16 +82,22 @@ export default function PacFileCard({
     source.remoteContent !== undefined ||
     source.pendingContent !== undefined ||
     Boolean(source.lastSyncedAt);
-  const download = () => {
+  const download = async () => {
+    if (downloadPending.current) return;
+    downloadPending.current = true;
+    setDownloading(true);
     try {
       const content = downloadedText(source);
       if (content === undefined)
         throw new Error(
           'Original text is unavailable. Synchronize this source first.',
         );
-      downloadRawPac(source.name, content);
+      await downloadRawPac(source.name, content);
     } catch (error) {
-      toast.error(String(error));
+      toast.error(`Could not download PAC/WPAD: ${String(error)}`);
+    } finally {
+      downloadPending.current = false;
+      setDownloading(false);
     }
   };
   // Both menu surfaces are rendered from the same action definitions.
@@ -107,10 +117,12 @@ export default function PacFileCard({
       disabled: !hasRaw,
     },
     {
-      label: 'Download original text',
+      label: downloading
+        ? 'Saving original text…'
+        : 'Download original text',
       icon: Download,
       run: download,
-      disabled: !hasRaw,
+      disabled: !hasRaw || downloading,
     },
     {
       label: 'Sync',
@@ -144,9 +156,23 @@ export default function PacFileCard({
   return (
     <>
       <ContextMenu modal={false}>
-        <ContextMenuTrigger asChild>
+        <ContextMenuTrigger
+          asChild
+          disabled={!preferences.proxyContextMenu}
+        >
           <Card
-            tabIndex={0}
+            tabIndex={preferences.proxyContextMenu ? 0 : undefined}
+            onContextMenuCapture={(event) => {
+              const target = event.target;
+              if (
+                target instanceof Element &&
+                (!event.currentTarget.contains(target) ||
+                  target.closest(
+                    'input, textarea, [contenteditable]:not([contenteditable="false"])',
+                  ))
+              )
+                event.stopPropagation();
+            }}
             className='min-w-0 gap-0 py-0 transition-colors hover:border-primary/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
           >
             <CardContent className='flex h-full flex-col gap-4 p-5'>
@@ -171,21 +197,23 @@ export default function PacFileCard({
                         : 'Local source')}
                   </p>
                 </div>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      variant='ghost'
-                      size='icon'
-                      className='size-8 shrink-0'
-                      aria-label={`File actions for ${source.name}`}
-                    >
-                      <MoreHorizontal className='size-4' />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align='end'>
-                    {menu(false)}
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                {!preferences.proxyContextMenu && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant='ghost'
+                        size='icon'
+                        className='size-8 shrink-0'
+                        aria-label={`File actions for ${source.name}`}
+                      >
+                        <MoreHorizontal className='size-4' />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align='end'>
+                      {menu(false)}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
               </div>
               <div className='flex flex-wrap items-center gap-2'>
                 <Badge
@@ -242,7 +270,9 @@ export default function PacFileCard({
             </CardContent>
           </Card>
         </ContextMenuTrigger>
-        <ContextMenuContent>{menu(true)}</ContextMenuContent>
+        {preferences.proxyContextMenu && (
+          <ContextMenuContent>{menu(true)}</ContextMenuContent>
+        )}
       </ContextMenu>
       <PacFileTagsEditor
         tags={normalizeProxyTags(source.tags)}
