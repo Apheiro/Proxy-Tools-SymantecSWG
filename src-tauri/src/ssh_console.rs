@@ -24,7 +24,7 @@ use tokio_util::sync::CancellationToken;
 const PAGE_BYTES: usize = 32 * 1024;
 const MAX_COMMANDS: usize = 5000;
 const MAX_INPUT_BYTES: usize = 1024 * 1024;
-#[derive(Clone, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConsoleBlock {
     id: usize,
@@ -33,7 +33,7 @@ pub struct ConsoleBlock {
     bytes: u64,
     complete: bool,
 }
-#[derive(Clone, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConsoleSession {
     id: String,
@@ -57,7 +57,132 @@ struct Entry {
     stop: CancellationToken,
 }
 #[derive(Default)]
-pub struct ConsoleState(Mutex<HashMap<String, Entry>>);
+pub struct ConsoleState(Mutex<HashMap<String, Entry>>, Mutex<bool>);
+// Two independent checkpoints let one damaged/interrupted write fall back to the other.
+// Only ConsoleSession is serialized: credentials, queued input and redactor secrets never are.
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionCheckpoint {
+    version: u32,
+    revision: u64,
+    session: ConsoleSession,
+}
+
+fn save_session(directory: &std::path::Path, state: &Arc<Mutex<ConsoleSession>>) -> Result<(), String> {
+    static REVISION: AtomicU64 = AtomicU64::new(0);
+    let now = chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default().max(0) as u64;
+    let previous = REVISION.fetch_update(Ordering::SeqCst, Ordering::SeqCst,
+        |value| Some(now.max(value + 1))).unwrap_or_default();
+    let revision = now.max(previous + 1);
+    static SLOTS: std::sync::OnceLock<Mutex<HashMap<PathBuf, u64>>> = std::sync::OnceLock::new();
+    let slot = {
+        let mut slots = SLOTS.get_or_init(|| Mutex::new(HashMap::new()))
+            .lock().map_err(|_| "SSH history is unavailable.")?;
+        let next = slots.entry(directory.to_path_buf()).or_default();
+        let slot = *next % 2;
+        *next += 1;
+        slot
+    };
+    let mut session = snapshot(state);
+    // Runtime status is never restored as a connection, nor persisted as remote prompt/error text.
+    session.connected = false;
+    session.busy = false;
+    session.phase = "Disconnected".into();
+    session.input_mode = "closed".into();
+    session.prompt.clear();
+    session.error = None;
+    let checkpoint = SessionCheckpoint { version: 1, revision, session };
+    let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+        use std::io::Write;
+        let temporary = directory.join(format!("session-{slot}.json.part"));
+        let mut options = std::fs::OpenOptions::new();
+        options.create(true).truncate(true).write(true);
+        #[cfg(unix)]
+        { use std::os::unix::fs::OpenOptionsExt; options.mode(0o600); }
+        let mut file = options.open(&temporary)?;
+        file.write_all(&serde_json::to_vec(&checkpoint)?)?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(temporary, directory.join(format!("session-{slot}.json")))?;
+        Ok(())
+    })();
+    result.map_err(|e| format!("SSH history could not be saved: {e}"))
+}
+
+fn load_sessions(app: &AppHandle, state: &ConsoleState) -> Result<(), String> {
+    let mut loaded = state.1.lock().map_err(|_| "SSH history is unavailable.")?;
+    if *loaded { return Ok(()); }
+    let root = crate::check_cache_dir(app).map_err(|e| e.to_string())?;
+    let mut entries = state.0.lock().map_err(|_| "SSH sessions are unavailable.")?;
+    for item in std::fs::read_dir(root).map_err(|e| e.to_string())? {
+        let Ok(item) = item else { continue };
+        let id = item.file_name().to_string_lossy().into_owned();
+        if !id.starts_with("ssh-") || !id.bytes().all(|c| c.is_ascii_digit() || b"ssh-".contains(&c)) {
+            continue;
+        }
+        let directory = item.path();
+        // Never follow session directory symlinks outside the cache.
+        if !item.file_type().map(|kind| kind.is_dir()).unwrap_or(false) { continue; }
+        let saved = ["session-0.json", "session-1.json", "session-0.json.part", "session-1.json.part"]
+            .into_iter().filter_map(|name| {
+                let path = directory.join(name);
+                if std::fs::symlink_metadata(&path).ok()?.file_type().is_symlink() { return None; }
+                let saved: SessionCheckpoint = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+                if saved.version != 1 || saved.session.id != id ||
+                    !matches!(saved.session.target_kind.as_str(), "proxy" | "isg") ||
+                    saved.session.blocks.len() > MAX_COMMANDS ||
+                    saved.session.blocks.iter().enumerate().any(|(i, block)| block.id != i) {
+                    return None;
+                }
+                Some(saved)
+            }).max_by_key(|saved| saved.revision);
+        let Some(mut session) = saved.map(|saved| saved.session) else { continue };
+        session.connected = false;
+        session.busy = false;
+        session.phase = "Disconnected".into();
+        session.input_mode = "closed".into();
+        session.prompt.clear();
+        session.error = None;
+        // Reconcile bytes written after the last checkpoint; never mark interrupted work complete.
+        for block in &mut session.blocks {
+            block.bytes = std::fs::metadata(directory.join(format!("{}.txt", block.id)))
+                .map(|metadata| metadata.len()).unwrap_or(0);
+        }
+        // A previous valid checkpoint may predate command metadata but its output is recoverable.
+        while session.blocks.len() < MAX_COMMANDS {
+            let id = session.blocks.len();
+            let Ok(metadata) = std::fs::metadata(directory.join(format!("{id}.txt"))) else { break };
+            session.blocks.push(ConsoleBlock {
+                id, command: "Recovered output (command metadata unavailable)".into(),
+                created_at: metadata.modified().map(|time| chrono::DateTime::<chrono::Utc>::from(time).to_rfc3339())
+                    .unwrap_or_else(|_| session.created_at.clone()),
+                bytes: metadata.len(), complete: false,
+            });
+        }
+        let (sender, receiver) = mpsc::channel(1);
+        drop(receiver); // Historical entries cannot accept input or open sockets.
+        entries.entry(session.id.clone()).or_insert(Entry {
+            snapshot: Arc::new(Mutex::new(session)), sender, directory,
+            stop: CancellationToken::new(),
+        });
+    }
+    *loaded = true;
+    Ok(())
+}
+
+fn history_revision(state: &Arc<Mutex<ConsoleSession>>) -> (usize, Option<(u64, bool)>) {
+    let session = state.lock().unwrap_or_else(|e| e.into_inner());
+    (session.blocks.len(), session.blocks.last().map(|block| (block.bytes, block.complete)))
+}
+
+async fn create_output(directory: &std::path::Path, block: usize) -> Result<tokio::fs::File, String> {
+    let mut options = tokio::fs::OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    options.open(directory.join(format!("{block}.txt"))).await.map_err(|e| e.to_string())
+}
+
 enum Input {
     Line(String, bool),
     Interrupt,
@@ -90,7 +215,8 @@ pub struct ConsoleSummary {
     block_count: usize,
 }
 #[tauri::command]
-pub fn list_ssh_sessions(state: State<'_, ConsoleState>) -> Vec<ConsoleSummary> {
+pub fn list_ssh_sessions(app: AppHandle, state: State<'_, ConsoleState>) -> Result<Vec<ConsoleSummary>, String> {
+    load_sessions(&app, &state)?;
     let entries = state.0.lock().unwrap_or_else(|e| e.into_inner());
     let mut result: Vec<_> = entries
         .values()
@@ -117,7 +243,7 @@ pub fn list_ssh_sessions(state: State<'_, ConsoleState>) -> Vec<ConsoleSummary> 
         })
         .collect();
     result.sort_by(|a, b| b.session.created_at.cmp(&a.session.created_at));
-    result
+    Ok(result)
 }
 #[tauri::command]
 pub fn get_ssh_session(
@@ -138,6 +264,7 @@ pub fn connect_ssh_console(
     state: State<'_, ConsoleState>,
     request: ConnectRequest,
 ) -> Result<String, String> {
+    load_sessions(&app, &state)?;
     if !matches!(request.target_kind.as_str(), "proxy" | "isg") { return Err("Unknown SSH target kind.".into()); }
     let target = SshTarget::appliance(&request.address, request.mocked)?;
     if request.username.trim().is_empty()
@@ -163,7 +290,10 @@ pub fn connect_ssh_console(
             "Close and remove an old session before creating another (32 session limit).".into(),
         );
     }
-    std::fs::create_dir(&directory).map_err(|e| format!("Cannot create session cache: {e}"))?;
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    { use std::os::unix::fs::DirBuilderExt; builder.mode(0o700); }
+    builder.create(&directory).map_err(|e| format!("Cannot create session cache: {e}"))?;
     let (sender, receiver) = mpsc::channel(32);
     let stop = CancellationToken::new();
     let status = Arc::new(Mutex::new(ConsoleSession {
@@ -187,6 +317,7 @@ pub fn connect_ssh_console(
             complete: false,
         }],
     }));
+    save_session(&directory, &status)?;
     entries.insert(
         id.clone(),
         Entry {
@@ -219,6 +350,9 @@ pub fn connect_ssh_console(
             .into();
             s.error = result.err();
         });
+        if let Err(error) = save_session(&directory, &status) {
+            change(&status, |s| s.error = Some(error));
+        }
     });
     Ok(id)
 }
@@ -244,7 +378,8 @@ pub fn send_ssh_input(
     if current.phase == "Sending input" {
         return Err("Wait for the current input to finish sending.".into());
     }
-    let value = normalize_input(&value, sensitive || current.input_mode == "secret")?;
+    let sensitive = sensitive || current.input_mode == "secret";
+    let value = normalize_input(&value, sensitive)?;
     entry
         .sender
         .try_send(Input::Line(value, sensitive))
@@ -577,13 +712,13 @@ async fn run_shell(
     let mut outgoing: Option<Pin<Box<dyn Future<Output = Result<(), String>> + Send>>> = None;
     let mut redactor = Redactor::default();
     redactor.secret(password);
-    let mut file = tokio::fs::File::create(directory.join("0.txt"))
-        .await
-        .map_err(|e| e.to_string())?;
+    let mut file = create_output(directory, 0).await?;
     let mut tail = Vec::new();
     let mut base: Option<String> = None;
     let mut last_data = Instant::now();
     let mut settled = false;
+    let mut checkpoint_at = Instant::now();
+    let mut saved_history = history_revision(&state);
     let mut tick = tokio::time::interval(Duration::from_millis(100));
     let result: Result<(), String> = async {
         loop {
@@ -634,8 +769,12 @@ async fn run_shell(
                             if current.blocks.len() >= MAX_COMMANDS { return Err("Session reached 5000 commands. Start a new session to continue.".into()); }
                             write_output(&mut file, &redactor.push(&[], true), &state).await?;
                             let id = current.blocks.len();
-                            file = tokio::fs::File::create(directory.join(format!("{id}.txt"))).await.map_err(|e| e.to_string())?;
+                            file.sync_data().await.map_err(|e| e.to_string())?;
+                            file = create_output(directory, id).await?;
                             change(&state, |s| s.blocks.push(ConsoleBlock { id, command: value.clone(), created_at: chrono::Utc::now().to_rfc3339(), bytes: 0, complete: false }));
+                            // Save the command before sending it so a crash cannot orphan its output.
+                            save_session(directory, &state)?;
+                            saved_history = history_revision(&state);
                         }
                         let value = normalize_input(&value, secret)?;
                         if secret { redactor.secret(&value); }
@@ -666,14 +805,24 @@ async fn run_shell(
                     _ => {}
                 }
             }
+            if checkpoint_at.elapsed() >= Duration::from_secs(1) {
+                let current_history = history_revision(&state);
+                if current_history != saved_history {
+                    file.sync_data().await.map_err(|e| e.to_string())?;
+                    save_session(directory, &state)?;
+                    saved_history = current_history;
+                }
+                checkpoint_at = Instant::now();
+            }
         }
         Ok(())
     }.await;
     drop(outgoing);
     let flushed = write_output(&mut file, &redactor.push(&[], true), &state).await;
+    let synced = file.sync_data().await.map_err(|e| e.to_string());
     let _ = writer.close().await;
     let disconnected = connection.disconnect().await;
-    result.and(flushed).and(disconnected)
+    result.and(flushed).and(synced).and(disconnected)
 }
 
 #[cfg(test)]
