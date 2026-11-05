@@ -1,16 +1,22 @@
 'use client';
 
 import {
+  DatePicker as KalyxDatePicker,
   DateTimePicker as KalyxDateTimePicker,
+  DateFnsAdapter,
   TimePicker,
 } from '@kalyx/react';
-import { CalendarClock, X } from 'lucide-react';
+import { useDateTimePicker } from '@kalyx/react/headless';
+import { CalendarClock, CalendarDays, X } from 'lucide-react';
 import {
   useEffect,
   useId,
+  useLayoutEffect,
+  useRef,
   useState,
   type ComponentProps,
 } from 'react';
+import { CompactTimeWheel } from '@/components/compactTimePicker';
 import { Button } from '@/components/ui/button';
 import {
   Popover,
@@ -65,6 +71,193 @@ type CalendarProps = ComponentProps<
   typeof KalyxDateTimePicker.Calendar
 >;
 type PopoverProps = ComponentProps<typeof PopoverContent>;
+
+const wheelDateAdapter = DateFnsAdapter;
+
+/** Use Kalyx's own time updates and constraints without adding another popover. */
+function EmbeddedTimeWheel({
+  value,
+  onChange,
+  displayTimezone,
+  disabled,
+  readOnly,
+  filterTime,
+  adapter = wheelDateAdapter,
+  label,
+}: Pick<
+  RootProps,
+  | 'value'
+  | 'onChange'
+  | 'displayTimezone'
+  | 'disabled'
+  | 'readOnly'
+  | 'filterTime'
+  | 'adapter'
+> & { label: string }) {
+  const expected = useRef('');
+  const committed = useRef(false);
+  const container = useRef<HTMLDivElement>(null);
+  const restoreFocus = useRef<string | null>(null);
+  const [reset, setReset] = useState(0);
+  const [unavailable, setUnavailable] = useState(false);
+  const blocked = disabled === true || !!readOnly;
+  const zone = displayTimezone ?? 'UTC';
+  const { currentTime, setTime } = useDateTimePicker({
+    value: value ?? null,
+    adapter,
+    displayTimezone: zone,
+    disabled: Array.isArray(disabled) ? disabled : undefined,
+    filterTime,
+    onChange: (next) => {
+      // Reject DST normalization into a different civil time/date. Kalyx retains
+      // the date and seconds; this check only verifies the requested clock time.
+      if (
+        blocked ||
+        !next ||
+        isoToDateTime(next, zone, 'second') !== expected.current
+      )
+        return;
+      committed.current = true;
+      setUnavailable(false);
+      onChange?.(next);
+    },
+  });
+  useLayoutEffect(() => {
+    if (!restoreFocus.current) return;
+    for (const node of container.current?.querySelectorAll<HTMLElement>(
+      '[role="spinbutton"]',
+    ) ?? []) {
+      if (node.getAttribute('aria-label') === restoreFocus.current)
+        node.focus({ preventScroll: true });
+    }
+    restoreFocus.current = null;
+  }, [reset]);
+  return (
+    <div ref={container} className='space-y-1'>
+      <CompactTimeWheel
+        key={reset}
+        label={label}
+        disabled={blocked}
+        value={`${String(currentTime.hours).padStart(2, '0')}:${String(currentTime.minutes).padStart(2, '0')}`}
+        onChange={(clock) => {
+          if (blocked) return;
+          const base = isoToDateTime(
+            value ?? adapter.today(zone),
+            zone,
+            'second',
+          );
+          expected.current = `${base.slice(0, 11)}${clock}${base.slice(16)}`;
+          committed.current = false;
+          const [hours, minutes] = clock.split(':').map(Number);
+          setTime({ hours, minutes });
+          if (!committed.current) {
+            // A rejected slot must also restore the wheel's internal scroll
+            // position, preserving keyboard focus on the edited column.
+            const active = document.activeElement;
+            restoreFocus.current = container.current?.contains(active)
+              ? (active?.getAttribute('aria-label') ?? null)
+              : null;
+            setReset((previous) => previous + 1);
+            setUnavailable(true);
+          }
+        }}
+      />
+      {unavailable && (
+        <p role='status' className='text-xs text-muted-foreground'>
+          This time is unavailable for the selected date.
+        </p>
+      )}
+    </div>
+  );
+}
+
+export type DatePickerProps = {
+  /** A civil date (YYYY-MM-DD), never an instant in the report timezone. */
+  value: string | null;
+  onChange: (value: string | null) => void;
+  label: string;
+  id?: string;
+  disabled?: boolean;
+  clearable?: boolean;
+  placeholder?: string;
+  className?: string;
+};
+
+/** Date-only wrapper around the same Kalyx Calendar used by DateTimePicker. */
+export function DatePicker({
+  value,
+  onChange,
+  label,
+  id,
+  disabled = false,
+  clearable = true,
+  placeholder = 'Select date',
+  className,
+}: DatePickerProps) {
+  const generatedId = useId();
+  const inputId = id ?? generatedId;
+  const [open, setOpen] = useState(false);
+  const commit = (next: string | null) => {
+    onChange(next?.slice(0, 10) ?? null);
+    setOpen(false);
+  };
+  return (
+    <div className={cn('flex min-w-0 flex-col gap-2', className)}>
+      <label
+        htmlFor={inputId}
+        className='text-xs text-muted-foreground'
+      >
+        {label}
+      </label>
+      <Popover open={open} onOpenChange={setOpen}>
+        <div className='relative'>
+          <PopoverTrigger
+            id={inputId}
+            disabled={disabled}
+            aria-label={label}
+            className={cn(
+              fieldClass,
+              'cursor-pointer justify-between gap-2 pr-10 text-left',
+            )}
+          >
+            <span className={dateValueStyles({ empty: !value })}>
+              {value || placeholder}
+            </span>
+            <CalendarDays className='size-4 shrink-0 text-muted-foreground' />
+          </PopoverTrigger>
+          {clearable && value && !disabled && (
+            <button
+              type='button'
+              aria-label={`Clear ${label}`}
+              className='absolute right-1 top-1 flex size-7 cursor-pointer items-center justify-center rounded hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+              onClick={() => commit(null)}
+            >
+              <X className='size-3.5' />
+            </button>
+          )}
+        </div>
+        <PopoverContent
+          className='w-72'
+          aria-label={`${label}: calendar`}
+        >
+          {/* Kalyx requires an ISO instant. UTC here is only its internal calendar
+              coordinate system: no report/browser zone conversion is performed,
+              and no timestamp or time escapes this date-only boundary. */}
+          <KalyxDatePicker
+            value={value ? `${value}T00:00:00.000Z` : null}
+            displayTimezone='UTC'
+            disabled={disabled}
+            onChange={commit}
+          >
+            <KalyxDateTimePicker.Calendar
+              classNames={calendarClasses}
+            />
+          </KalyxDatePicker>
+        </PopoverContent>
+      </Popover>
+    </div>
+  );
+}
 
 export type DateTimePickerProps = Omit<
   RootProps,
@@ -271,21 +464,17 @@ export function DateTimePicker({
                 ),
               )}
             />
-            <div className='grid grid-cols-2 gap-2'>
-              <div className='space-y-1'>
-                <p className='text-xs text-muted-foreground'>Hour</p>
-                <KalyxDateTimePicker.HourList
-                  classNames={{ ...timeClasses, ...timeClassNames }}
-                />
-              </div>
-              <div className='space-y-1'>
-                <p className='text-xs text-muted-foreground'>
-                  Minute
-                </p>
-                <KalyxDateTimePicker.MinuteList
-                  classNames={{ ...timeClasses, ...timeClassNames }}
-                />
-              </div>
+            <div className={timeClassNames?.root}>
+              <EmbeddedTimeWheel
+                value={value}
+                onChange={onChange}
+                displayTimezone={displayTimezone}
+                disabled={disabled}
+                readOnly={readOnly}
+                filterTime={rootProps.filterTime}
+                adapter={rootProps.adapter}
+                label={label}
+              />
             </div>
             <label className='block space-y-1 text-xs text-muted-foreground'>
               {precision === 'second'

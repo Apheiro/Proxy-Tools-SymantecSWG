@@ -8,8 +8,11 @@ import type {
   TrafficProcessingConfig,
 } from './trafficAnalysis';
 import type { CaptureArchive } from './trafficCapture';
+import type { TrafficCaptureScope } from './trafficCaptureScope';
 
-export default function useTrafficCapture() {
+export default function useTrafficCapture(
+  scope: TrafficCaptureScope,
+) {
   const [dataset, setDataset] = useState<TrafficDataset | null>(null);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<{
@@ -23,29 +26,44 @@ export default function useTrafficCapture() {
     useState<TrafficProcessingConfig | null>(null);
   const pending = useRef<string | null>(null);
   const mounted = useRef(true);
-  const refreshArchives = useCallback(
-    async () =>
-      setArchives(
-        await invoke<CaptureArchive[]>('list_traffic_analyses'),
-      ),
-    [],
-  );
+  const archiveRequest = useRef(0);
+  const refreshArchives = useCallback(async () => {
+    const request = ++archiveRequest.current;
+    const entries = await invoke<CaptureArchive[]>(
+      'list_traffic_analyses',
+      {
+        scope,
+        unassigned: false,
+      },
+    );
+    if (mounted.current && request === archiveRequest.current)
+      setArchives(entries);
+  }, [scope]);
   useEffect(() => {
     mounted.current = true;
-    void refreshArchives().catch((error) =>
-      toast.error(String(error)),
-    );
     void invoke<TrafficProcessingConfig>(
       'get_traffic_processing_config',
     )
-      .then(setConfig)
-      .catch((error) => toast.error(String(error)));
+      .then((value) => {
+        if (mounted.current) setConfig(value);
+      })
+      .catch((error) => {
+        if (mounted.current) toast.error(String(error));
+      });
     return () => {
       mounted.current = false;
       if (pending.current)
         void invoke('abort_access_log_parse', {
           parseId: pending.current,
         }).catch(() => {});
+    };
+  }, []);
+  useEffect(() => {
+    void refreshArchives().catch((error) => {
+      if (mounted.current) toast.error(String(error));
+    });
+    return () => {
+      archiveRequest.current++;
     };
   }, [refreshArchives]);
   const discard = useCallback(async () => {
@@ -77,6 +95,7 @@ export default function useTrafficCapture() {
       id = await invoke<string>('start_access_log_parse', {
         source,
         workers: workers || null,
+        scope,
       });
       pending.current = id;
       if (!mounted.current)
@@ -126,6 +145,10 @@ export default function useTrafficCapture() {
               isFileEnd: fileEnd,
             },
           );
+          if (!mounted.current)
+            throw new Error(
+              'File processing cancelled because the capture context changed.',
+            );
           offset = end;
           if (fileEnd || performance.now() - lastPaint > 500) {
             setDataset(result);
@@ -149,17 +172,18 @@ export default function useTrafficCapture() {
         } while (offset < file.size);
         completedBytes += file.size;
       }
-      toast.success(
-        files.length === 1
-          ? `Indexed all records in ${source}.`
-          : `Indexed ${files.length} logs into one capture.`,
-      );
+      if (mounted.current)
+        toast.success(
+          files.length === 1
+            ? `Indexed all records in ${source}.`
+            : `Indexed ${files.length} logs into one capture.`,
+        );
     } catch (error) {
       if (id) {
         await invoke('abort_access_log_parse', { parseId: id }).catch(
           () => {},
         );
-        pending.current = null;
+        if (pending.current === id) pending.current = null;
       }
       if (mounted.current) {
         setDataset(null);
@@ -182,16 +206,19 @@ export default function useTrafficCapture() {
     try {
       const result = await invoke<TrafficDataset>(
         'load_traffic_analysis',
-        { id },
+        { id, scope, unassigned: false },
       );
+      if (!mounted.current) return;
       await discard();
+      if (!mounted.current) return;
       setDataset(result);
       setProgress(null);
       toast.success('Loaded the full indexed capture.');
     } catch (error) {
-      toast.error(`Could not load capture: ${String(error)}`);
+      if (mounted.current)
+        toast.error(`Could not load capture: ${String(error)}`);
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   };
   const save = async (captureId: string) => {
@@ -200,21 +227,31 @@ export default function useTrafficCapture() {
       const path = await invoke<string>('save_traffic_analysis', {
         parseId: captureId,
       });
+      if (!mounted.current) return false;
       await refreshArchives();
+      if (!mounted.current) return false;
       toast.success('Capture and counters saved.', {
         description: path,
       });
       return true;
     } catch (error) {
-      toast.error(`Could not save capture: ${String(error)}`);
+      if (mounted.current)
+        toast.error(`Could not save capture: ${String(error)}`);
       return false;
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   };
+  const setStreamDataset = useCallback(
+    (value: TrafficDataset | null) => {
+      if (!mounted.current) return;
+      setDataset(value);
+    },
+    [],
+  );
   return {
     dataset,
-    setDataset,
+    setDataset: setStreamDataset,
     busy,
     progress,
     archives,

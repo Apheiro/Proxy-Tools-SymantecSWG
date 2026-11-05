@@ -27,6 +27,7 @@ import { toast } from 'sonner';
 import BackgroundRefresh from '@/components/backgroundRefresh';
 import PageHeader from '@/components/pageHeader';
 import TrafficTimeline from '@/components/trafficTimeline';
+import { TimeZonePicker } from '@/components/ui/time-zone-picker';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -76,6 +77,10 @@ import {
 } from '@/lib/uiVariants';
 import useDataSourceMode from '@/lib/useDataSourceMode';
 import useTrafficCapture from '@/lib/useTrafficCapture';
+import {
+  trafficProxyIdentity,
+  type TrafficCaptureScope,
+} from '@/lib/trafficCaptureScope';
 
 const workspaceTabStyles = cva({
   base: 'whitespace-nowrap border-b-2 px-4 py-2 text-sm font-medium',
@@ -104,16 +109,83 @@ export default function TrafficAnalysisWorkspace({
 }: {
   proxy: string;
 }) {
-  const capture = useTrafficCapture();
+  const { mode: sourceMode, ready } = useDataSourceMode();
+  const [identity, setIdentity] = useState<{
+    target: string;
+    value: string;
+  } | null>(null);
+  useEffect(() => {
+    const readIdentity = () => {
+      let inventory: Proxy[] = [];
+      try {
+        const stored: unknown = JSON.parse(
+          localStorage.getItem('proxies') ?? '[]',
+        );
+        if (Array.isArray(stored))
+          inventory = stored.filter(
+            (item) => item && typeof item === 'object',
+          );
+      } catch {
+        /* Scope an unavailable inventory to the explicitly selected target. */
+      }
+      setIdentity({
+        target: proxy,
+        value: trafficProxyIdentity(proxy, inventory),
+      });
+    };
+    readIdentity();
+    window.addEventListener('storage', readIdentity);
+    window.addEventListener('focus', readIdentity);
+    return () => {
+      window.removeEventListener('storage', readIdentity);
+      window.removeEventListener('focus', readIdentity);
+    };
+  }, [proxy]);
+  const scope = useMemo<TrafficCaptureScope>(
+    () => ({
+      proxyIdentity: identity?.value ?? '',
+      profile: sourceMode,
+    }),
+    [identity?.value, sourceMode],
+  );
+  if (!ready || identity?.target !== proxy)
+    return (
+      <main className='p-8 text-muted-foreground'>
+        Loading Traffic Analysis…
+      </main>
+    );
+  if (!scope.proxyIdentity)
+    return (
+      <main className='p-8 text-muted-foreground'>
+        Select a proxy to open Traffic Analysis.
+      </main>
+    );
+  return (
+    <ScopedTrafficAnalysisWorkspace
+      key={JSON.stringify([proxy, scope])}
+      proxy={proxy}
+      scope={scope}
+    />
+  );
+}
+
+function ScopedTrafficAnalysisWorkspace({
+  proxy,
+  scope: captureScope,
+}: {
+  proxy: string;
+  scope: TrafficCaptureScope;
+}) {
+  const capture = useTrafficCapture(captureScope);
   const workersId = useId();
   const periodId = useId();
   const startingDayId = useId();
   const networkPrefixId = useId();
   const accessLogId = useId();
-  const timeZoneId = useId();
   const rangeControlsId = useId();
   const filterControlsId = useId();
-  const { mode: sourceMode, ready } = useDataSourceMode();
+  const sourceMode = captureScope.profile;
+  const ready = true;
   const [mode, setMode] = useState<'static' | 'live'>('static');
   const [tab, setTab] = useState<(typeof TABS)[number]>('Overview');
   const [metric, setMetric] = useState<'requests' | 'bytes'>(
@@ -146,7 +218,6 @@ export default function TrafficAnalysisWorkspace({
   };
   const [workers, setWorkers] = useState(0);
   const [zone, setZone] = useState('UTC');
-  const [zones, setZones] = useState(['UTC']);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [rangeOpen, setRangeOpen] = useState(false);
   const [filters, setFilters] = useState<CaptureFilters>(
@@ -204,7 +275,6 @@ export default function TrafficAnalysisWorkspace({
 
   useEffect(() => {
     const available = trafficTimeZones();
-    setZones(available);
     try {
       const storedGrouping = localStorage.getItem(
         'traffic-analysis-client-grouping',
@@ -474,6 +544,7 @@ export default function TrafficAnalysisWorkspace({
             username: credentials?.username ?? '',
             password: credentials?.password ?? '',
             useMockData: sourceMode === 'mock',
+            scope: captureScope,
           },
         );
         if (!cancelled)
@@ -518,6 +589,7 @@ export default function TrafficAnalysisWorkspace({
     sourceMode,
     proxy,
     capture.setDataset,
+    captureScope,
   ]);
 
   const stop = async () => {
@@ -1048,14 +1120,10 @@ export default function TrafficAnalysisWorkspace({
             <CardTitle className='text-sm'>UTC Time Zone</CardTitle>
           </CardHeader>
           <CardContent className='px-3'>
-            <label htmlFor={timeZoneId} className='sr-only'>
-              Display time zone
-            </label>
-            <SelectField
-              id={timeZoneId}
-              className='w-full lg:w-64'
+            <TimeZonePicker
               value={zone}
-              onValueChange={(selectedValue) => {
+              description='Display time zone. Saved locally for Traffic Analysis; custom range inputs remain in UTC.'
+              onChange={(selectedValue) => {
                 setZone(selectedValue);
                 try {
                   localStorage.setItem(
@@ -1064,13 +1132,7 @@ export default function TrafficAnalysisWorkspace({
                   );
                 } catch {}
               }}
-            >
-              {zones.map((name) => (
-                <SelectOption key={name} value={name}>
-                  {name.replaceAll('_', ' ')}
-                </SelectOption>
-              ))}
-            </SelectField>
+            />
           </CardContent>
         </Card>
       </div>
@@ -1159,7 +1221,33 @@ export default function TrafficAnalysisWorkspace({
                       or drag the range handles.
                     </p>
                   </div>
-                  <div className='flex items-center gap-2'>
+                  <div className='flex min-w-0 flex-wrap items-center gap-2'>
+                    <label
+                      htmlFor={`${rangeControlsId}-metric`}
+                      className='flex min-w-0 items-center gap-2 text-xs text-muted-foreground'
+                    >
+                      Metric
+                      <SelectField
+                        value={metric}
+                        id={`${rangeControlsId}-metric`}
+                        aria-label='Chart and ranking metric'
+                        onValueChange={(selectedValue) =>
+                          setMetric(
+                            selectedValue as 'requests' | 'bytes',
+                          )
+                        }
+                      >
+                        <SelectOption value='requests'>
+                          Requests
+                        </SelectOption>
+                        <SelectOption
+                          value='bytes'
+                          disabled={!bytesAvailable}
+                        >
+                          Bytes
+                        </SelectOption>
+                      </SelectField>
+                    </label>
                     <Badge variant='outline'>{scope}</Badge>
                     {analysisLoading && (
                       <Badge
@@ -1178,46 +1266,69 @@ export default function TrafficAnalysisWorkspace({
                     )}
                   </div>
                 </CardHeader>
-                <CardContent className='space-y-2 px-4'>
+                <CardContent className='min-w-0 space-y-4 px-4'>
                   {!!availableDays.length && (
-                    <div className='flex flex-wrap items-end gap-2 pb-2'>
-                      <label
-                        htmlFor={periodId}
-                        className='space-y-1 text-xs text-muted-foreground'
-                      >
-                        Period
-                        <SelectField
-                          value={dayStart ? 'day' : 'all'}
-                          id={periodId}
-                          aria-label='Analysis period'
-                          onValueChange={(value) =>
-                            value === 'all'
-                              ? setPreset(null)
-                              : chooseDay(0)
-                          }
+                    <div className='space-y-3 pb-2'>
+                      <div className='flex flex-wrap items-end gap-x-4 gap-y-3'>
+                        <label
+                          htmlFor={periodId}
+                          className='space-y-1 text-xs text-muted-foreground'
                         >
-                          <SelectOption value='day'>Day</SelectOption>
-                          <SelectOption value='all'>
-                            All time
-                          </SelectOption>
-                        </SelectField>
-                      </label>
-                      {dayStart && (
-                        <>
-                          <Button
-                            size='sm'
-                            variant='outline'
-                            disabled={dayIndex <= 0}
-                            onClick={() => chooseDay(dayIndex - 1)}
+                          Period
+                          <SelectField
+                            value={dayStart ? 'day' : 'all'}
+                            id={periodId}
+                            aria-label='Analysis period'
+                            onValueChange={(value) =>
+                              value === 'all'
+                                ? setPreset(null)
+                                : chooseDay(0)
+                            }
                           >
-                            Previous
-                          </Button>
+                            <SelectOption value='day'>
+                              Day
+                            </SelectOption>
+                            <SelectOption value='all'>
+                              All time
+                            </SelectOption>
+                          </SelectField>
+                        </label>
+                        {dayStart && (
+                          <div className='flex flex-wrap items-center gap-2'>
+                            <Button
+                              size='sm'
+                              variant='outline'
+                              disabled={dayIndex <= 0}
+                              onClick={() => chooseDay(dayIndex - 1)}
+                            >
+                              Previous
+                            </Button>
+                            <Button
+                              size='sm'
+                              variant='outline'
+                              disabled={
+                                dayIndex >= availableDays.length - 1
+                              }
+                              onClick={() => chooseDay(dayIndex + 1)}
+                            >
+                              Next
+                            </Button>
+                            <span className='text-xs text-muted-foreground'>
+                              {dayIndex + 1} / {availableDays.length}{' '}
+                              available days
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                      {dayStart && (
+                        <div className='grid min-w-0 gap-3 sm:max-w-md sm:grid-cols-[minmax(0,1fr)_minmax(0,8rem)]'>
                           <label
                             htmlFor={startingDayId}
-                            className='space-y-1 text-xs text-muted-foreground'
+                            className='block min-w-0 space-y-1 text-xs text-muted-foreground'
                           >
-                            Starting day ({zone})
+                            Starting day
                             <SelectField
+                              className='w-full'
                               value={dayStart}
                               id={startingDayId}
                               aria-label='Starting day'
@@ -1230,17 +1341,7 @@ export default function TrafficAnalysisWorkspace({
                               ))}
                             </SelectField>
                           </label>
-                          <Button
-                            size='sm'
-                            variant='outline'
-                            disabled={
-                              dayIndex >= availableDays.length - 1
-                            }
-                            onClick={() => chooseDay(dayIndex + 1)}
-                          >
-                            Next
-                          </Button>
-                          <label className='space-y-1 text-xs text-muted-foreground'>
+                          <label className='block min-w-0 space-y-1 text-xs text-muted-foreground'>
                             Window · {dayCount}{' '}
                             {dayCount === 1 ? 'day' : 'days'}
                             <input
@@ -1249,7 +1350,7 @@ export default function TrafficAnalysisWorkspace({
                               step={1}
                               value={dayCount}
                               aria-label='Number of days'
-                              className={`${INPUT} block w-24`}
+                              className={`${INPUT} block w-full`}
                               onChange={(event) => {
                                 const count = Number(
                                   event.target.value,
@@ -1263,11 +1364,7 @@ export default function TrafficAnalysisWorkspace({
                               }}
                             />
                           </label>
-                          <span className='pb-2 text-xs text-muted-foreground'>
-                            {dayIndex + 1} / {availableDays.length}{' '}
-                            available days
-                          </span>
-                        </>
+                        </div>
                       )}
                     </div>
                   )}
@@ -1279,118 +1376,109 @@ export default function TrafficAnalysisWorkspace({
                     timeZone={zone}
                     metric={metric}
                   />
-                  {rangeOpen && (
-                    <div
-                      id={rangeControlsId}
-                      className='flex flex-wrap items-end gap-2'
-                    >
-                      <label
-                        htmlFor={`${rangeControlsId}-metric`}
-                        className='space-y-1 text-xs text-muted-foreground'
-                      >
-                        Chart and ranking metric
-                        <SelectField
-                          value={metric}
-                          id={`${rangeControlsId}-metric`}
-                          aria-label='Chart and ranking metric'
-                          onValueChange={(selectedValue) =>
-                            setMetric(
-                              selectedValue as 'requests' | 'bytes',
-                            )
-                          }
-                        >
-                          <SelectOption value='requests'>
-                            Requests
-                          </SelectOption>
-                          <SelectOption
-                            value='bytes'
-                            disabled={!bytesAvailable}
-                          >
-                            Bytes
-                          </SelectOption>
-                        </SelectField>
-                      </label>
-                      <DateTimePicker
-                        label='From (UTC)'
-                        timeZone='UTC'
-                        precision='second'
-                        value={dateTimeToISO(draftStart, 'UTC')}
-                        onChange={(value) =>
-                          setDraftStart(
-                            isoToDateTime(value, 'UTC', 'second'),
-                          )
-                        }
-                      />
-                      <DateTimePicker
-                        label='Through (UTC, inclusive)'
-                        timeZone='UTC'
-                        precision='second'
-                        value={dateTimeToISO(draftEnd, 'UTC')}
-                        onChange={(value) =>
-                          setDraftEnd(
-                            isoToDateTime(value, 'UTC', 'second'),
-                          )
-                        }
-                      />
+                  <div className='flex flex-wrap items-start justify-between gap-3'>
+                    <p className='min-w-0 flex-1 break-words text-xs text-muted-foreground'>
+                      {range.start == null
+                        ? 'Capture start'
+                        : formatTime(range.start)}{' '}
+                      →{' '}
+                      {range.end == null
+                        ? 'Capture end'
+                        : formatTime(range.end)}{' '}
+                      · Adaptive density cells. Records without a
+                      valid timestamp appear only in unbounded time
+                      ranges.
+                    </p>
+                    <div className='shrink-0'>
                       <Button
                         size='sm'
                         variant='outline'
-                        onClick={applyRange}
+                        className='cursor-pointer'
+                        onClick={() =>
+                          setRangeOpen((value) => !value)
+                        }
+                        aria-expanded={rangeOpen}
+                        aria-controls={rangeControlsId}
                       >
-                        Apply range
+                        Range
+                        <ChevronDown
+                          className={disclosureIconStyles({
+                            expanded: rangeOpen,
+                            className: 'size-4',
+                          })}
+                        />
                       </Button>
-                      <Button
-                        size='sm'
-                        variant='ghost'
-                        onClick={() => setPreset(null)}
-                      >
-                        All time
-                      </Button>
-                      {[15, 60, 1440].map((minutes) => (
+                    </div>
+                  </div>
+                  {rangeOpen && (
+                    <div
+                      id={rangeControlsId}
+                      className='space-y-4 border-t pt-4'
+                    >
+                      <p className='text-xs font-medium'>
+                        Custom UTC range
+                      </p>
+                      <div className='grid min-w-0 gap-3 sm:grid-cols-2'>
+                        <DateTimePicker
+                          label='From (UTC)'
+                          timeZone='UTC'
+                          precision='second'
+                          value={dateTimeToISO(draftStart, 'UTC')}
+                          onChange={(value) =>
+                            setDraftStart(
+                              isoToDateTime(value, 'UTC', 'second'),
+                            )
+                          }
+                        />
+                        <DateTimePicker
+                          label='Through (UTC, inclusive)'
+                          timeZone='UTC'
+                          precision='second'
+                          value={dateTimeToISO(draftEnd, 'UTC')}
+                          onChange={(value) =>
+                            setDraftEnd(
+                              isoToDateTime(value, 'UTC', 'second'),
+                            )
+                          }
+                        />
+                      </div>
+                      <div className='flex flex-wrap items-center justify-between gap-3'>
+                        <div className='flex flex-wrap items-center gap-1'>
+                          <span className='mr-2 text-xs text-muted-foreground'>
+                            Quick range
+                          </span>
+                          <Button
+                            size='sm'
+                            variant='ghost'
+                            onClick={() => setPreset(null)}
+                          >
+                            All time
+                          </Button>
+                          {[15, 60, 1440].map((minutes) => (
+                            <Button
+                              key={minutes}
+                              size='sm'
+                              variant='ghost'
+                              onClick={() => setPreset(minutes)}
+                            >
+                              {minutes === 15
+                                ? 'Last 15m'
+                                : minutes === 60
+                                  ? 'Last 1h'
+                                  : 'Last 24h'}
+                            </Button>
+                          ))}
+                        </div>
                         <Button
-                          key={minutes}
                           size='sm'
-                          variant='ghost'
-                          onClick={() => setPreset(minutes)}
+                          variant='outline'
+                          onClick={applyRange}
                         >
-                          {minutes === 15
-                            ? 'Last 15m'
-                            : minutes === 60
-                              ? 'Last 1h'
-                              : 'Last 24h'}
+                          Apply range
                         </Button>
-                      ))}
+                      </div>
                     </div>
                   )}
-                  <p className='text-xs text-muted-foreground'>
-                    {range.start == null
-                      ? 'Capture start'
-                      : formatTime(range.start)}{' '}
-                    →{' '}
-                    {range.end == null
-                      ? 'Capture end'
-                      : formatTime(range.end)}{' '}
-                    · Adaptive density cells. Records without a valid
-                    timestamp appear only in unbounded time ranges.
-                  </p>
-                  <div className='flex justify-end'>
-                    <Button
-                      size='sm'
-                      variant='outline'
-                      className='cursor-pointer'
-                      onClick={() => setRangeOpen((value) => !value)}
-                      aria-expanded={rangeOpen}
-                      aria-controls={rangeControlsId}
-                    >
-                      Range
-                      <ChevronDown
-                        className={disclosureIconStyles({
-                          expanded: rangeOpen,
-                          className: 'size-4',
-                        })}
-                      />
-                    </Button>
-                  </div>
                 </CardContent>
               </Card>
               <Card className='gap-0 py-0'>

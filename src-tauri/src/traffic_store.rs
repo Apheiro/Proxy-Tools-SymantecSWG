@@ -14,6 +14,49 @@ use crate::traffic_analysis::{
 };
 
 const VERSION: i64 = 3;
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TrafficCaptureScope {
+    pub proxy_identity: String,
+    pub profile: String,
+}
+
+impl TrafficCaptureScope {
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        if self.proxy_identity.trim().is_empty()
+            || !matches!(self.profile.as_str(), "live" | "mock")
+        {
+            return Err("Select a proxy and a valid data profile for this capture.".into());
+        }
+        Ok(())
+    }
+}
+
+fn read_scope(conn: &Connection) -> Result<Option<TrafficCaptureScope>, String> {
+    use rusqlite::OptionalExtension;
+    let json: Option<String> = conn
+        .query_row(
+            "SELECT value FROM meta WHERE key='capture_scope'",
+            [],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    json.map(|value| {
+        let scope: TrafficCaptureScope = serde_json::from_str(&value).map_err(|e| e.to_string())?;
+        scope.validate()?;
+        Ok(scope)
+    })
+    .transpose()
+}
+
+pub(crate) fn capture_scope(
+    app: &AppHandle,
+    id: &str,
+) -> Result<Option<TrafficCaptureScope>, String> {
+    read_scope(&open(app, id)?)
+}
 fn is_v3(conn: &Connection) -> bool {
     conn.query_row("SELECT value FROM meta WHERE key='version'", [], |r| {
         r.get::<_, String>(0)
@@ -176,6 +219,18 @@ pub(crate) struct CaptureStore {
     pub file: PathBuf,
 }
 impl CaptureStore {
+    pub(crate) fn set_scope(&self, scope: &TrafficCaptureScope) -> Result<(), String> {
+        scope.validate()?;
+        self.connection
+            .as_ref()
+            .ok_or("Capture is closed.")?
+            .execute(
+                "INSERT INTO meta(key,value) VALUES('capture_scope',?)",
+                [serde_json::to_string(scope).map_err(|e| e.to_string())?],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
     pub(crate) fn create(app: &AppHandle, id: String, source: &str) -> Result<Self, String> {
         let file = path(app, &id)?;
         std::fs::OpenOptions::new()
@@ -257,7 +312,7 @@ impl Drop for CaptureStore {
     }
 }
 
-fn open(app: &AppHandle, id: &str) -> Result<Connection, String> {
+pub(crate) fn open(app: &AppHandle, id: &str) -> Result<Connection, String> {
     open_file(&path(app, id)?)
 }
 fn open_file(file: &std::path::Path) -> Result<Connection, String> {
@@ -332,6 +387,7 @@ pub struct SavedCapture {
     pub records: usize,
     pub saved_at: String,
     pub path: String,
+    pub scope: Option<TrafficCaptureScope>,
 }
 pub(crate) fn list(app: &AppHandle) -> Result<Vec<SavedCapture>, String> {
     let mut captures = Vec::new();
@@ -353,6 +409,7 @@ pub(crate) fn list(app: &AppHandle) -> Result<Vec<SavedCapture>, String> {
             continue;
         }
         captures.push(SavedCapture {
+            scope: read_scope(&conn)?,
             id,
             source: conn
                 .query_row("SELECT value FROM meta WHERE key='source'", [], |r| {

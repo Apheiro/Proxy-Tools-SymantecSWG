@@ -98,6 +98,7 @@ function SelectField({
   const selectedIndex = options.findIndex(
     (option) => option.value === String(currentValue),
   );
+  const selectedOption = options[selectedIndex];
   const virtual = options.length > 40;
   const changeValue = (nextValue: string) => {
     if (value === undefined) setUncontrolledValue(nextValue);
@@ -136,9 +137,25 @@ function SelectField({
         aria-describedby={ariaDescribedBy}
         onKeyDown={virtual ? handleTypeahead : undefined}
       >
-        <SelectValue placeholder={placeholder}>
-          {options[selectedIndex]?.element.props.children}
-        </SelectValue>
+        {/* This is our own label, not Radix's Value portal target. Keeping it
+            independent also preserves virtual selections when ItemText unmounts. */}
+        <span data-slot='select-value'>
+          {selectedOption ? (
+            <>
+              <span
+                aria-hidden={!!selectedOption.text}
+                className='flex min-w-0 items-center gap-2'
+              >
+                {selectedOption.element.props.children}
+              </span>
+              {selectedOption.text && (
+                <span className='sr-only'>{selectedOption.text}</span>
+              )}
+            </>
+          ) : (
+            placeholder
+          )}
+        </span>
       </SelectTrigger>
       {virtual ? (
         open && (

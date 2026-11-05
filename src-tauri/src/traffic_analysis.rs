@@ -117,7 +117,11 @@ pub(crate) fn create_capture_session(
     app: &AppHandle,
     source: String,
     workers: Option<usize>,
+    scope: Option<crate::traffic_store::TrafficCaptureScope>,
 ) -> Result<(String, ParseSession), String> {
+    if let Some(scope) = &scope {
+        scope.validate()?;
+    }
     let id = format!(
         "static-{}-{}",
         Utc::now().timestamp_micros(),
@@ -130,6 +134,13 @@ pub(crate) fn create_capture_session(
         id.clone(),
         &source,
     )?);
+    if let Some(scope) = &scope {
+        session
+            .store
+            .as_ref()
+            .ok_or("Capture store is unavailable.")?
+            .set_scope(scope)?;
+    }
     session.source = source;
     session.workers = workers
         .unwrap_or(config.recommended_workers)
@@ -538,9 +549,10 @@ pub fn start_access_log_parse(
     app: AppHandle,
     source: String,
     workers: Option<usize>,
+    scope: Option<crate::traffic_store::TrafficCaptureScope>,
     state: State<'_, AccessLogParseState>,
 ) -> Result<String, String> {
-    let (id, session) = create_capture_session(&app, source.clone(), workers)?;
+    let (id, session) = create_capture_session(&app, source.clone(), workers, scope)?;
     let log_source = source.clone();
     let config = get_traffic_processing_config();
     let workers = workers
@@ -894,6 +906,7 @@ pub struct TrafficArchiveInfo {
     records: usize,
     saved_at: String,
     path: String,
+    scope: Option<crate::traffic_store::TrafficCaptureScope>,
 }
 
 fn traffic_archive_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
@@ -990,9 +1003,25 @@ fn read_saved(path: &std::path::Path) -> Result<SavedTrafficAnalysis, String> {
 }
 
 #[tauri::command]
-pub async fn load_traffic_analysis(app: AppHandle, id: String) -> Result<AccessLogDataset, String> {
+pub async fn load_traffic_analysis(
+    app: AppHandle,
+    id: String,
+    scope: Option<crate::traffic_store::TrafficCaptureScope>,
+    unassigned: Option<bool>,
+) -> Result<AccessLogDataset, String> {
+    if let Some(scope) = &scope {
+        scope.validate()?;
+    }
     tokio::task::spawn_blocking(move || {
-        if crate::traffic_store::path(&app, &id)?.is_file() {
+        let indexed = crate::traffic_store::path(&app, &id)?.is_file();
+        let owner = if indexed { crate::traffic_store::capture_scope(&app, &id)? } else { None };
+        let allowed = if unassigned.unwrap_or(false) {
+            owner.is_none()
+        } else {
+            scope.is_some() && owner == scope
+        };
+        if !allowed { return Err("This capture does not belong to the selected proxy/profile. Open unassigned captures explicitly to recover older logs.".into()); }
+        if indexed {
             return crate::traffic_store::dataset(&app, &id);
         }
         // Older JSONL saves are indexed once, retaining their complete records.
@@ -1036,11 +1065,19 @@ pub async fn load_traffic_analysis(app: AppHandle, id: String) -> Result<AccessL
 }
 
 #[tauri::command]
-pub async fn list_traffic_analyses(app: AppHandle) -> Result<Vec<TrafficArchiveInfo>, String> {
+pub async fn list_traffic_analyses(
+    app: AppHandle,
+    scope: Option<crate::traffic_store::TrafficCaptureScope>,
+    unassigned: Option<bool>,
+) -> Result<Vec<TrafficArchiveInfo>, String> {
+    if let Some(scope) = &scope {
+        scope.validate()?;
+    }
     tokio::task::spawn_blocking(move || {
         let mut entries: Vec<TrafficArchiveInfo> = crate::traffic_store::list(&app)?
             .into_iter()
             .map(|c| TrafficArchiveInfo {
+                scope: c.scope,
                 id: c.id,
                 source: c.source,
                 records: c.records,
@@ -1059,6 +1096,7 @@ pub async fn list_traffic_analyses(app: AppHandle) -> Result<Vec<TrafficArchiveI
                 }
                 if let Ok(saved) = read_saved(&path) {
                     entries.push(TrafficArchiveInfo {
+                        scope: None,
                         id: path
                             .file_stem()
                             .unwrap_or_default()
@@ -1072,6 +1110,13 @@ pub async fn list_traffic_analyses(app: AppHandle) -> Result<Vec<TrafficArchiveI
                 }
             }
         }
+        entries.retain(|entry| {
+            if unassigned.unwrap_or(false) {
+                entry.scope.is_none()
+            } else {
+                scope.is_some() && entry.scope == scope
+            }
+        });
         entries.sort_by(|a, b| b.saved_at.cmp(&a.saved_at));
         Ok(entries)
     })

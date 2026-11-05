@@ -408,7 +408,14 @@ pub async fn start_traffic_stream(
     use_mock_data: bool,
     state: State<'_, TrafficStreamState>,
     parse_state: State<'_, AccessLogParseState>,
+    scope: Option<crate::traffic_store::TrafficCaptureScope>,
 ) -> Result<String, String> {
+    if let Some(scope) = &scope {
+        scope.validate()?;
+        if (scope.profile == "mock") != use_mock_data {
+            return Err("Capture profile does not match the stream data source.".into());
+        }
+    }
     if !use_mock_data && (username.is_empty() || password.is_empty()) {
         return Err(
             "Proxy credentials are required. Configure a username and password in Settings.".into(),
@@ -424,7 +431,7 @@ pub async fn start_traffic_stream(
             .await?;
     let token = CancellationToken::new();
     let streams = Arc::clone(&state.0);
-    let (capture_id, session) = create_capture_session(&app, url.to_string(), None)?;
+    let (capture_id, session) = create_capture_session(&app, url.to_string(), None, scope)?;
     let sessions = Arc::clone(&parse_state.0);
     sessions
         .lock()
