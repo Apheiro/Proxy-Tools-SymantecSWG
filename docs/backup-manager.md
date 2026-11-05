@@ -4,6 +4,10 @@ Open **Diagnostic tools → Backup Manager** for a registered appliance. The pag
 
 The workspace adapts to screen size, with connection controls/activity on the left and saved backups/virtualized preview on the right. The list automatically selects the first available backup and preserves the current selection on refresh. Each row has a Delete action with an appliance/date confirmation. Deletion removes only the validated backup text and metadata files, blocks an in-progress backup, and updates the list and preview. **Open folder** opens the existing application cache directory using the installed Tauri Opener plugin, with the path resolved in Rust rather than accepted from the frontend.
 
+The list, count, selection, refresh after capture/deletion and preview are scoped to the selected appliance and Live/Mocked Data profile. New metadata stores `applianceIdentity` (normalized registered address, with the selected address as a fallback) and `requestedAddress` separately from the actual SSH destination. This distinguishes mocked appliances even though they all connect to loopback. Existing backup files are never moved, renamed or rewritten.
+
+For older metadata, ownership is inferred conservatively from unique inventory address/hostname matches. Observed aliases and names are retained in profile-specific `backupOwners.v1.live` / `backupOwners.v1.mock` localStorage entries, keyed by registered address. This preserves previous names/IPs observed by Backup Manager across restarts while the registered identity stays the same. Conflicting ownership is excluded. Old loopback-only mock backups require a unique appliance-name match. Ambiguous records, or obsolete names/IPs with no surviving identity evidence, cannot safely be assigned automatically; their original files remain accessible through Open folder. Changing the registered identity itself or clearing localStorage can remove the evidence needed for legacy matching. Capture under an ambiguous selected address is rejected until a unique registered address is selected.
+
 ## SSH workflow
 
 Connection, authentication, host-key verification and interactive output handling live in the shared `ssh_client.rs` module, documented in [Shared SSH automation](ssh-automation.md). Backup Manager supplies its SGOS prompt policy and maps progress callbacks to Tauri events; destination selection, command ordering, key-display cleanup and backup storage remain in its workflow.
@@ -29,7 +33,7 @@ The native task survives navigation. Concurrent backups are rejected, and normal
 Files are written directly under the existing `app.path().app_cache_dir()` (the same runtime directory used by trace captures), without a new storage root:
 
 - `backup-<sanitized-appliance>-<UTC-timestamp>.txt`: complete captured command output, possibly including the device's command echo, excluding its final prompt.
-- Matching `.json`: appliance, destination, creation time, mode, mock flag, byte count and warnings.
+- Matching `.json`: appliance, destination, optional appliance identity/requested address, creation time, mode, mock flag, byte count and warnings.
 - `.part`/`.json.part`: unpublished working files. Crashes can leave these artifacts; they are not listed as backups.
 - `backup-ssh-known-hosts`: SSH public host-key pins using the library's OpenSSH known-hosts format. First connections use trust on first use; later key changes fail before sending credentials. A deliberate host-key rotation requires reviewing/removing the relevant cache entry.
 

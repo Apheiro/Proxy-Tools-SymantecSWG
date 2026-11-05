@@ -48,7 +48,7 @@ import {
   type BackupRecord,
   type BackupStatus,
   displayBackupLine,
-  findBackupAppliance,
+  createBackupScope,
 } from '@/lib/backupManager';
 import { useCredentialRevision } from '@/lib/credentialStore';
 import getCredentials from '@/lib/getCredentials';
@@ -223,15 +223,26 @@ export default function BackupManagerWorkspace({
   address: string;
 }) {
   const { mode: source, ready } = useDataSourceMode();
+  if (!ready) return null;
+  return <ScopedBackupManager key={`${source}:${address}`} address={address} source={source} ready={ready} />;
+}
+
+function ScopedBackupManager({ address, source, ready }: {
+  address: string; source: string; ready: boolean;
+}) {
+  const [scope] = useState(() => createBackupScope(
+    getLocalStorage<Proxy[]>('proxies') ?? [], address, source === 'mock',
+  ));
   const revision = useCredentialRevision();
   const modeId = useId();
   const [mode, setMode] = useState<BackupMode>('encrypted');
   const [records, setRecords] = useState<BackupRecord[]>([]);
   const [selected, setSelected] = useState('');
-  const [content, setContent] = useState('');
+  const [preview, setPreview] = useState<{ id: string; text: string } | null>(null);
+  const content = preview?.id === selected ? preview.text : '';
   const [loading, setLoading] = useState(false);
   const [starting, setStarting] = useState(false);
-  const [appliance, setAppliance] = useState(address);
+  const appliance = scope.appliance;
   const [hasCredentials, setHasCredentials] = useState(false);
   const [error, setError] = useState('');
   const [deleteTarget, setDeleteTarget] =
@@ -242,8 +253,11 @@ export default function BackupManagerWorkspace({
     (record) => record.id === selected,
   );
 
+  const refreshSequence = useRef(0);
   const refresh = useCallback(async () => {
-    const value = await invoke<BackupRecord[]>('list_backups');
+    const sequence = ++refreshSequence.current;
+    const value = (await invoke<BackupRecord[]>('list_backups')).filter(scope.includes);
+    if (sequence !== refreshSequence.current) return [];
     setRecords(value);
     setSelected((previous) =>
       value.some((record) => record.id === previous)
@@ -251,7 +265,7 @@ export default function BackupManagerWorkspace({
         : (value[0]?.id ?? ''),
     );
     return value;
-  }, []);
+  }, [scope]);
   const { status, setStatus, desktop } = useBackupStatus(
     refresh,
     setError,
@@ -261,16 +275,6 @@ export default function BackupManagerWorkspace({
   useEffect(() => {
     setHasCredentials(Boolean(getCredentials()));
   }, [revision]);
-
-  useEffect(() => {
-    const proxy = findBackupAppliance(
-      getLocalStorage<Proxy[]>('proxies') ?? [],
-      address,
-    );
-    setAppliance(
-      proxy?.hostname || address || 'No appliance selected',
-    );
-  }, [address]);
 
   useEffect(() => {
     if (!status?.id || status.running) return;
@@ -283,14 +287,17 @@ export default function BackupManagerWorkspace({
   }, [status?.id, status?.running, refresh]);
 
   useEffect(() => {
-    setContent('');
-    if (!selected) return;
+    setPreview(null);
+    if (!selected) {
+      setLoading(false);
+      return;
+    }
     let disposed = false;
     setLoading(true);
     setError('');
     void invoke<string>('read_backup', { id: selected })
       .then((value) => {
-        if (!disposed) setContent(value);
+        if (!disposed) setPreview({ id: selected, text: value });
       })
       .catch((reason: unknown) => {
         if (!disposed) setError(String(reason));
@@ -306,12 +313,17 @@ export default function BackupManagerWorkspace({
   const start = async () => {
     const credentials = getCredentials();
     if (!credentials || !address) return;
+    if (!scope.identity) {
+      setError('This address matches multiple appliances. Open Backup Manager using a unique registered address.');
+      return;
+    }
     setStarting(true);
     setError('');
     try {
       await invoke<string>('start_backup', {
         request: {
           appliance,
+          applianceIdentity: scope.identity || null,
           address,
           ...credentials,
           mode,
@@ -346,7 +358,7 @@ export default function BackupManagerWorkspace({
       await invoke('delete_backup', { id: deleteTarget.id });
       if (selected === deleteTarget.id) {
         setSelected('');
-        setContent('');
+        setPreview(null);
       }
       setDeleteTarget(null);
       await refresh();

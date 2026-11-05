@@ -16,6 +16,10 @@ pub enum BackupMode {
 pub struct BackupRecord {
     pub id: String,
     pub appliance: String,
+    #[serde(default)]
+    pub appliance_identity: Option<String>,
+    #[serde(default)]
+    pub requested_address: Option<String>,
     pub address: String,
     pub created_at: String,
     pub mode: BackupMode,
@@ -145,6 +149,8 @@ mod tests {
         let record = BackupRecord {
             id: id.clone(),
             appliance: "name".into(),
+            appliance_identity: None,
+            requested_address: None,
             address: "127.0.0.1".into(),
             created_at: chrono::Utc::now().to_rfc3339(),
             mode: BackupMode::Unencrypted,

@@ -47,6 +47,8 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
 #[serde(rename_all = "camelCase")]
 pub struct BackupRequest {
     appliance: String,
+    #[serde(default)]
+    appliance_identity: Option<String>,
     address: String,
     username: String,
     password: String,
@@ -326,6 +328,8 @@ async fn run_backup(
         let record = BackupRecord {
             id,
             appliance: request.appliance,
+            appliance_identity: request.appliance_identity,
+            requested_address: Some(request.address.clone()),
             address: host.into(),
             created_at: chrono::Utc::now().to_rfc3339(),
             mode: request.mode,
@@ -372,6 +376,7 @@ mod tests {
     fn mock_destination_never_uses_appliance_address() {
         let mut request = BackupRequest {
             appliance: "Production".into(),
+            appliance_identity: None,
             address: "real-appliance.example".into(),
             username: "u".into(),
             password: "p".into(),
