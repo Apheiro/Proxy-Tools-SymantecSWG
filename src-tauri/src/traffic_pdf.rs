@@ -5,7 +5,8 @@ use tauri::{AppHandle, Manager};
 use tauri_plugin_opener::OpenerExt;
 
 fn report_path(app: &AppHandle, filename: &str) -> Result<PathBuf, String> {
-    if !filename.starts_with("traffic-analysis-")
+    if !(filename.starts_with("traffic-analysis-")
+        || filename.starts_with("comparative-report-"))
         || !filename.ends_with(".pdf")
         || filename.len() > 120
         || !filename

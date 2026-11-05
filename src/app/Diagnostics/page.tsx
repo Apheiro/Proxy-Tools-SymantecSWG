@@ -7,6 +7,7 @@ import { invoke } from '@tauri-apps/api/core';
 import {
   Activity,
   Archive,
+  ChartNoAxesCombined,
   ArrowUpRight,
   FileText,
   Network,
@@ -177,6 +178,13 @@ function PageBase() {
             description:
               'Access logs, bandwidth and traffic insights.',
             icon: Activity,
+          },
+          {
+            path: 'ComparativeReports',
+            title: 'Comparative Reports',
+            description:
+              'Compare historical traffic from indexed captures.',
+            icon: ChartNoAxesCombined,
           },
           {
             path: 'BackupManager',
