@@ -287,6 +287,31 @@ function SettingsDialog({
                   </div>
                 </section>
               </div>
+              <section className='mb-4 flex items-center justify-between gap-4 rounded-xl border p-4'>
+                <div>
+                  <Label
+                    htmlFor='html-pdf-reports'
+                    className='text-sm font-semibold'
+                  >
+                    Use new HTML PDF reports (Ironpress)
+                  </Label>
+                  <p
+                    id='html-pdf-reports-description'
+                    className='mt-1 text-xs text-muted-foreground'
+                  >
+                    Experimental. Off: legacy PDF. On: new document
+                    design generated natively in Tauri.
+                  </p>
+                </div>
+                <Switch
+                  id='html-pdf-reports'
+                  aria-describedby='html-pdf-reports-description'
+                  checked={preferences.htmlPdfReports}
+                  onCheckedChange={(value) =>
+                    setAppPreferences({ htmlPdfReports: value })
+                  }
+                />
+              </section>
               <section className='flex items-center justify-between gap-4 rounded-xl border p-4'>
                 <div>
                   <Label

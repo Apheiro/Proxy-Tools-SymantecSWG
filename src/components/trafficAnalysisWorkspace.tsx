@@ -1,6 +1,7 @@
 'use client';
 
 import { invoke, isTauri } from '@tauri-apps/api/core';
+import { useAppPreferences } from '@/lib/appPreferences';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import {
   Activity,
@@ -176,6 +177,7 @@ function ScopedTrafficAnalysisWorkspace({
   proxy: string;
   scope: TrafficCaptureScope;
 }) {
+  const { htmlPdfReports } = useAppPreferences();
   const capture = useTrafficCapture(captureScope);
   const workersId = useId();
   const periodId = useId();
@@ -751,6 +753,10 @@ function ScopedTrafficAnalysisWorkspace({
     setExportingPdf(true);
     setExportMessage('Preparing PDF export…');
     try {
+      if (htmlPdfReports && !isTauri())
+        throw new Error(
+          'Ironpress reports require the desktop app. Turn off HTML PDF reports in Settings → General to use legacy PDF in the browser.',
+        );
       // All selection, theme and source values are snapshotted before asynchronous work.
       const report = await collectTrafficReport(
         {
@@ -779,19 +785,33 @@ function ScopedTrafficAnalysisWorkspace({
         setExportMessage,
       );
       setExportMessage('Rendering PDF pages…');
-      const { trafficReportBlob } = await import(
-        '@/components/pdf/trafficReportDocument'
-      );
-      if (controller.signal.aborted) return;
-      const blob = await trafficReportBlob(report);
+      let blob: Blob | null = null;
+      let html: string | null = null;
+      if (htmlPdfReports) {
+        const { trafficHtmlReport } = await import(
+          '@/lib/htmlReportTemplates'
+        );
+        if (controller.signal.aborted) return;
+        html = trafficHtmlReport(report);
+      } else {
+        const { trafficReportBlob } = await import(
+          '@/components/pdf/trafficReportDocument'
+        );
+        if (controller.signal.aborted) return;
+        blob = await trafficReportBlob(report);
+      }
       if (controller.signal.aborted) return;
       const filename = `traffic-analysis-${report.generatedAt.replace(/[:.]/g, '-')}-${report.theme}.pdf`;
       if (isTauri()) {
         setExportMessage('Saving PDF…');
-        const path = await invoke<string>('save_traffic_pdf', {
-          filename,
-          bytes: Array.from(new Uint8Array(await blob.arrayBuffer())),
-        });
+        const path = html !== null
+          ? await invoke<string>('save_html_report_pdf', { filename, html })
+          : await invoke<string>('save_traffic_pdf', {
+              filename,
+              bytes: Array.from(new Uint8Array(await blob!.arrayBuffer())),
+            });
+        // Native conversion cannot be interrupted; cancellation suppresses viewer/toast.
+        if (controller.signal.aborted) return;
         toast.success('PDF saved.', {
           description: path,
           duration: 15000,
@@ -818,7 +838,7 @@ function ScopedTrafficAnalysisWorkspace({
           ),
         );
       } else {
-        const url = URL.createObjectURL(blob);
+        const url = URL.createObjectURL(blob!);
         const anchor = document.createElement('a');
         anchor.href = url;
         anchor.download = filename;

@@ -77,3 +77,43 @@ pub async fn open_traffic_pdf(
     .await
     .map_err(|e| e.to_string())?
 }
+
+/// Convert a self-contained document in-process. No WebView, browser, or shell.
+#[tauri::command]
+pub async fn save_html_report_pdf(
+    app: AppHandle,
+    filename: String,
+    html: String,
+) -> Result<String, String> {
+    // Validate the destination before spending resources on conversion.
+    report_path(&app, &filename)?;
+    if html.trim().is_empty() || html.len() > 4 * 1024 * 1024 {
+        return Err("HTML report is empty or exceeds the 4 MiB limit. Reduce the report scope.".into());
+    }
+    let bytes = tokio::task::spawn_blocking(move || {
+        // No base_path/resource_root: document-local files are not authorized.
+        // The remote feature is disabled in Cargo; sanitization stays enabled.
+        let converter = ironpress::HtmlConverter::new()
+            .page_size(ironpress::PageSize::A4)
+            .margin(ironpress::Margin::uniform(36.0))
+            .sanitize(true)
+            .add_font(
+                "ProxyToolsReport",
+                include_bytes!("../../public/fonts/report/ProxyToolsReport-400.ttf").to_vec(),
+            )
+            .add_font(
+                "ProxyToolsReportSemibold",
+                include_bytes!("../../public/fonts/report/ProxyToolsReport-600.ttf").to_vec(),
+            );
+        let bytes = converter
+            .convert(&html)
+            .map_err(|e| format!("Ironpress could not render this report: {e}"))?;
+        if bytes.len() > 32 * 1024 * 1024 || !bytes.starts_with(b"%PDF-") {
+            return Err("Ironpress produced an invalid PDF or exceeded the 32 MiB report limit.".to_string());
+        }
+        Ok(bytes)
+    })
+    .await
+    .map_err(|_| "The Ironpress rendering task did not complete. Try a smaller report scope.".to_string())??;
+    save_traffic_pdf(app, filename, bytes).await
+}

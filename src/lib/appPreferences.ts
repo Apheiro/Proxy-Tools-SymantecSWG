@@ -7,12 +7,14 @@ import {
 } from './shortcutBindings';
 export type AppPreferences = {
   proxyContextMenu: boolean;
+  htmlPdfReports: boolean;
   shortcuts: ShortcutMap;
 };
 const KEY = 'app-interface-preferences';
 const EVENT = 'app-interface-preferences-changed';
 const DEFAULTS: AppPreferences = {
   proxyContextMenu: false,
+  htmlPdfReports: false,
   shortcuts: DEFAULT_SHORTCUTS,
 };
 let rawCache: string | null | undefined;
@@ -31,6 +33,7 @@ function read(): AppPreferences {
     const stored = raw ? JSON.parse(raw) : {};
     cache = {
       proxyContextMenu: stored?.proxyContextMenu === true,
+      htmlPdfReports: stored?.htmlPdfReports === true,
       shortcuts: sanitizeShortcuts(stored?.shortcuts),
     };
   } catch {

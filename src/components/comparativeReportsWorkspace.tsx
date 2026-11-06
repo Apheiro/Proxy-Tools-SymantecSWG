@@ -1,6 +1,7 @@
 'use client';
 
 import { invoke, isTauri } from '@tauri-apps/api/core';
+import { useAppPreferences } from '@/lib/appPreferences';
 import {
   ArrowLeft,
   ChartNoAxesCombined,
@@ -50,7 +51,10 @@ import {
   type ComparisonSnapshot,
   type ComparisonSource,
 } from '@/lib/trafficComparison';
-import type { ReportMetric } from '@/lib/trafficReport';
+import {
+  trafficReportPalette,
+  type ReportMetric,
+} from '@/lib/trafficReport';
 import useDataSourceMode from '@/lib/useDataSourceMode';
 
 const Chart = dynamic(() => import('echarts-for-react'), {
@@ -155,6 +159,7 @@ function Workspace({
   proxy: string;
   scope: TrafficCaptureScope;
 }) {
+  const { htmlPdfReports } = useAppPreferences();
   const [archives, setArchives] = useState<CaptureArchive[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
   const [unassigned, setUnassigned] = useState(false);
@@ -467,11 +472,39 @@ function Workspace({
     if (!snapshot) return;
     setExporting(true);
     try {
+      const appearance = {
+        theme: document.documentElement.classList.contains('dark')
+          ? ('dark' as const)
+          : ('light' as const),
+        palette: trafficReportPalette(),
+        exportedAt: new Date().toISOString(),
+      };
+      if (htmlPdfReports) {
+        if (!isTauri())
+          throw new Error(
+            'Ironpress reports require the desktop app. Turn off HTML PDF reports in Settings → General to use legacy PDF in the browser.',
+          );
+        const { comparisonHtmlReport } = await import(
+          '@/lib/htmlReportTemplates'
+        );
+        const filename = `comparative-report-${appearance.exportedAt.replace(/[:.]/g, '-')}.pdf`;
+        await invoke<string>('save_html_report_pdf', {
+          filename,
+          html: comparisonHtmlReport(snapshot, appearance),
+        });
+        await invoke('open_traffic_pdf', { filename, folder: false }).catch(
+          (error) => toast.error(
+            `PDF saved, but could not open the viewer: ${String(error)}`,
+          ),
+        );
+        toast.success('Comparative Ironpress PDF saved.');
+        return;
+      }
       const { comparisonReportBlob } = await import(
         '@/components/pdf/trafficComparisonDocument'
       );
-      const blob = await comparisonReportBlob(snapshot);
-      const filename = `comparative-report-${snapshot.generatedAt.replace(/[:.]/g, '-')}.pdf`;
+      const blob = await comparisonReportBlob(snapshot, appearance);
+      const filename = `comparative-report-${appearance.exportedAt.replace(/[:.]/g, '-')}.pdf`;
       if (isTauri()) {
         await invoke('save_traffic_pdf', {
           filename,
