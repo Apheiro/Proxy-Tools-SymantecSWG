@@ -3920,6 +3920,7 @@ dependencies = [
  "hickory-resolver",
  "html-escape",
  "once_cell",
+ "quick-xml",
  "rand 0.10.3",
  "regex",
  "reqwest 0.12.23",

@@ -173,6 +173,12 @@ function PageBase() {
       >
         {[
           {
+            path: 'ActiveConnections',
+            title: 'Active Connections',
+            description: 'Sample proxied sessions and inspect saved captures.',
+            icon: Network,
+          },
+          {
             path: 'TrafficAnalysis',
             title: 'Traffic Analysis',
             description:

@@ -43,6 +43,7 @@ russh = { version = "=0.63.3", default-features = false, features = ["ring", "rs
 semver = "1"
 sha2 = "0.10"
 similar = "2.7.0"
+quick-xml = "=0.38.3"
 base64 = "0.22"
 
 [target.'cfg(windows)'.dependencies]

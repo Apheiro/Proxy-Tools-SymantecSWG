@@ -1,5 +1,7 @@
 /** biome-ignore-all lint/correctness/useUniqueElementIds: <> */
 import '@/styles/globals.css';
+import { Suspense } from 'react';
+import ActiveConnectionsGuard from '@/components/activeConnectionsGuard';
 import { TooltipProvider } from '@radix-ui/react-tooltip';
 import type { Metadata } from 'next';
 import Navbar from '@/components/navbar';
@@ -50,6 +52,7 @@ export default function RootLayout({
               </div>
               <Toaster position='top-center' />
               <AppUpdateNotifier />
+              <Suspense fallback={null}><ActiveConnectionsGuard /></Suspense>
             </EmbeddedBrowserProvider>
           </div>
         </ThemeProvider>
