@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.12.0](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/compare/v0.11.0...v0.12.0) (2026-11-06)
+
+
+### Features
+
+* **backup:** scope saved backups to appliance profiles ([47832c8](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/commit/47832c8df1ecd2d9100cf23e131d483519391f35))
+* **diagnostics:** add live and historical active connections monitor ([adfc479](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/commit/adfc4792adebc0ce6a5fca4e76862c54fa93baa5))
+* **ssh:** restore console history across app restarts ([2653ccd](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/commit/2653ccdb0f66d33fd3a7a7c8621428dfebb26d21))
+* **traffic:** add comparative reports from indexed captures ([b98c5d0](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/commit/b98c5d01b0d60288e2ed5105e2a61f3d211b78db))
+* **traffic:** add Ironpress PDF exports alongside legacy reports ([4a06cfd](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/commit/4a06cfd70ef42659e63051f166b98d3161c798f7))
+* **traffic:** scope captures and refine analyzer controls ([c2fcd7a](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/commit/c2fcd7a312c6056ca202121371da134291b34fa7))
+
+
+### Bug Fixes
+
+* **ui:** resolve Kalyx headless types for production builds ([be0c2c2](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/commit/be0c2c2ea4e2d48c308bd725de2076085c599fe0))
+
 ## [0.11.0](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/compare/v0.10.0...v0.11.0) (2026-11-04)
 
 
