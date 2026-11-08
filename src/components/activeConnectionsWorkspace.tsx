@@ -16,7 +16,10 @@ import Link from 'next/link';
 import dynamic from 'next/dynamic';
 import { useEffect, useMemo, useState } from 'react';
 import { Tabs } from 'radix-ui';
+import { useReducedMotion } from 'motion/react';
+import { TooltipOne } from '@/components/ui/tooltip';
 import { toast } from 'sonner';
+import { useDiagnosticsVisible } from '@/components/diagnosticsTasks';
 import PageHeader from '@/components/pageHeader';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -36,6 +39,8 @@ import useDataSourceMode from '@/lib/useDataSourceMode';
 import { formatBytes } from '@/lib/trafficAnalysis';
 import {
   useActiveQuery,
+  formatDuration,
+  pollingLabel,
   xmlValue,
   XML_FIELDS,
   type ActiveScope,
@@ -78,6 +83,7 @@ export default function ActiveConnectionsWorkspace({
 }
 
 function Workspace({ scope: passedScope }: { scope: ActiveScope }) {
+  const visible = useDiagnosticsVisible();
   const scope = useMemo(
     () => passedScope,
     [passedScope.proxy, passedScope.profile],
@@ -104,13 +110,22 @@ function Workspace({ scope: passedScope }: { scope: ActiveScope }) {
   const [sort, setSort] = useState('session');
   const [filter, setFilter] = useState('all');
   const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(20);
+  const reduceMotion = useReducedMotion();
   const [detailId, setDetailId] = useState('');
   const [collapsedSessions, setCollapsedSessions] = useState<
     Set<number>
   >(new Set());
   const slider = useComparisonZoomSlider();
+  const [zoom, setZoom] = useState<{ startValue: number; endValue: number } | null>(null);
+  const [chartEpoch, setChartEpoch] = useState(0);
+  const [frozenTimeline, setFrozenTimeline] = useState<QueryResult<ConnectionSnapshot> | null>(null);
   const captureId = saved?.id ?? status?.id ?? '';
   const revision = status?.last?.id ?? 0;
+  useEffect(() => {
+    setZoom(null);
+    setFrozenTimeline(null);
+  }, [captureId, through, historyOffset]);
   const timeline = useActiveQuery<QueryResult<ConnectionSnapshot>>(
     scope,
     captureId,
@@ -122,8 +137,9 @@ function Workspace({ scope: passedScope }: { scope: ActiveScope }) {
       // A changing revision retriggers bounded queries without becoming an SQL predicate.
       ...(saved ? {} : { connection: String(revision) }),
     },
+    true,
   );
-  const samples = timeline.data?.items ?? [];
+  const samples = (frozenTimeline ?? timeline.data)?.items ?? [];
   const newest = samples.at(-1) ?? null;
   const liveSample = saved
     ? ([...samples]
@@ -146,8 +162,8 @@ function Workspace({ scope: passedScope }: { scope: ActiveScope }) {
           ? 'destinations'
           : 'connections',
     snapshot: inspected?.id,
-    offset: page * 50,
-    limit: 50,
+    offset: page * pageSize,
+    limit: pageSize,
     search: debouncedSearch,
     sort,
     filter,
@@ -226,11 +242,18 @@ function Workspace({ scope: passedScope }: { scope: ActiveScope }) {
     const timer = setTimeout(() => setDebouncedSearch(search), 250);
     return () => clearTimeout(timer);
   }, [search]);
+  // Pin inspection independently from the live summary/timeline. Incoming samples
+  // must never replace the rows the user is reading or their detail snapshot.
+  useEffect(() => {
+    if (!selected && inspected) setSelected(inspected);
+  }, [selected, inspected]);
   useEffect(() => {
     setPage(0);
-    setDetailId('');
-    setCollapsedSessions(new Set());
-  }, [tab, debouncedSearch, sort, filter, inspected?.id]);
+  }, [tab, debouncedSearch, sort, filter, pageSize, captureId]);
+  useEffect(() => {
+    if (!rows.data || rows.busy) return;
+    setPage((current) => Math.min(current, Math.max(0, Math.ceil(rows.data!.total / pageSize) - 1)));
+  }, [rows.data, rows.busy, pageSize]);
 
   async function start() {
     setBusy(true);
@@ -321,10 +344,13 @@ function Workspace({ scope: passedScope }: { scope: ActiveScope }) {
     }
   }
   function resetView() {
+    setChartEpoch((value) => value + 1);
     setSelected(null);
     setThrough(null);
     setHistoryOffset(0);
     setDetailId('');
+    setZoom(null);
+    setFrozenTimeline(null);
   }
   const running =
     !!status && !['Stopped', 'Stopping'].includes(status.state);
@@ -356,13 +382,16 @@ function Workspace({ scope: passedScope }: { scope: ActiveScope }) {
   const peak = latestGood.length
     ? Math.max(...latestGood.map((s) => s.sessions ?? 0))
     : null;
-  const usage = liveSample
+  const usage = liveSample && (status?.interval ?? interval) > 0
     ? (liveSample.response_bytes * 3600) /
       (status?.interval ?? interval)
     : null;
   const queryError = timeline.error || rows.error;
-  const chartOption = {
-    animation: false,
+  const chartOption = useMemo(() => ({
+    animation: !reduceMotion,
+    animationDuration: 0,
+    animationDurationUpdate: !saved && !through && !historyOffset && !frozenTimeline && !reduceMotion ? 300 : 0,
+    animationEasingUpdate: 'linear',
     color: ['#3b82f6', '#14b8a6'],
     tooltip: {
       trigger: 'axis',
@@ -393,8 +422,9 @@ function Workspace({ scope: passedScope }: { scope: ActiveScope }) {
       name: 'Concurrency',
       splitLine: { lineStyle: { opacity: 0.12 } },
     },
-    dataZoom: [{ type: 'inside', filterMode: 'none' }, slider],
+    dataZoom: [{ id: 'inside', type: 'inside', filterMode: 'none', ...zoom }, { ...slider, id: 'slider', ...zoom }],
     series: (['sessions', 'connections'] as const).map((key, i) => ({
+      id: key,
       name: i === 0 ? 'Proxied Sessions' : 'Proxied Connections',
       type: 'line',
       connectNulls: false,
@@ -404,7 +434,7 @@ function Workspace({ scope: passedScope }: { scope: ActiveScope }) {
       data: samples.flatMap((s, index) => {
         const previous = samples[index - 1];
         const intervalMs =
-          (saved?.interval ?? status?.interval ?? interval) * 1000;
+          Math.max(1, saved?.interval ?? status?.interval ?? interval) * 1000;
         return previous &&
           s.received_at - previous.received_at > intervalMs * 2.5
           ? [
@@ -413,11 +443,13 @@ function Workspace({ scope: passedScope }: { scope: ActiveScope }) {
             ]
           : [[s.received_at, s[key], s.id]];
       }),
+      markLine: { data: [] },
       ...(i === 0 &&
       liveSample &&
       !saved &&
       !through &&
-      !historyOffset
+      !historyOffset &&
+      !frozenTimeline
         ? {
             markLine: {
               symbol: 'none',
@@ -430,7 +462,7 @@ function Workspace({ scope: passedScope }: { scope: ActiveScope }) {
           }
         : {}),
     })),
-  };
+  }), [samples, zone, slider, zoom, reduceMotion, saved, through, historyOffset, status?.interval, interval, liveSample?.id, frozenTimeline]);
 
   return (
     <main className='mx-auto flex w-full min-w-0 max-w-7xl flex-col gap-5 px-4 py-5 md:px-6'>
@@ -477,7 +509,7 @@ function Workspace({ scope: passedScope }: { scope: ActiveScope }) {
       <Card className='gap-3 p-4'>
         <div className='flex flex-wrap items-center gap-2'>
           <label className='flex items-center gap-2 text-xs text-muted-foreground'>
-            Sample interval
+            Polling mode
             <select
               aria-label='Sampling interval'
               className={INPUT}
@@ -487,6 +519,7 @@ function Workspace({ scope: passedScope }: { scope: ActiveScope }) {
               }
               disabled={running}
             >
+              <option value={0}>Continuous</option>
               {[5, 10, 30, 60].map((n) => (
                 <option key={n} value={n}>
                   {n}s
@@ -545,17 +578,19 @@ function Workspace({ scope: passedScope }: { scope: ActiveScope }) {
           </div>
         </div>
         <p className='text-xs text-muted-foreground'>
-          Read-only snapshots.{' '}
+          {pollingLabel(saved?.interval ?? status?.interval ?? interval)}. Read-only snapshots.{' '}
           {usage == null
-            ? 'A 1.6 MB response every 10s is about 576 MB/hour uncompressed.'
+            ? (saved?.interval ?? status?.interval ?? interval) === 0
+              ? 'Continuous mode uses a 350 ms safety delay after each completed sample; bandwidth depends on response and processing time.'
+              : 'Bandwidth estimate will be available after the first valid sample.'
             : `Estimated ${formatBytes(usage)}/hour uncompressed at this response size.`}{' '}
           Missing polls are gaps. ICAP and acceleration codes do not
           measure timing.
         </p>
         {running && !saved && (
           <p className='text-xs text-muted-foreground'>
-            Capture continues when navigating. Opening another
-            proxy/profile stops the incompatible capture. Save
+            Capture continues when navigating. Several proxies can collect in parallel. Switching
+            data profile stops incompatible captures. Save
             explicitly to keep it in the library.
           </p>
         )}
@@ -666,17 +701,25 @@ function Workspace({ scope: passedScope }: { scope: ActiveScope }) {
                 variant='secondary'
                 onClick={resetView}
               >
-                {saved ? 'Latest saved sample' : 'Return to Live'}
+                {saved ? 'Latest saved sample' : 'Inspect latest sample'}
               </Button>
             )}
           </div>
         </div>
         {samples.length ? (
           <Chart
+            key={`${captureId}:${through}:${historyOffset}:${chartEpoch}`}
             option={chartOption}
             style={{ height: 310, width: '100%' }}
-            notMerge
+            notMerge={false}
             onEvents={{
+              datazoom: (_event: unknown, instance: { getOption: () => { dataZoom?: Array<{ startValue?: number; endValue?: number }> } }) => {
+                const range = instance.getOption().dataZoom?.[0];
+                if (typeof range?.startValue === 'number' && typeof range?.endValue === 'number') {
+                  setFrozenTimeline((previous) => previous ?? timeline.data);
+                  setZoom({ startValue: range.startValue, endValue: range.endValue });
+                }
+              },
               click: (event: {
                 data?: [number, number | null, number];
               }) => {
@@ -696,6 +739,7 @@ function Workspace({ scope: passedScope }: { scope: ActiveScope }) {
                 : 'Start a capture or load a saved capture.'}
           </div>
         )}
+        {frozenTimeline && <p className='text-xs text-muted-foreground'>Timeline pinned while zoomed. Inspect latest sample to resume the live timeline.</p>}
         {samples.some(
           (sample) =>
             sample.quality !== 'OK' && sample.quality !== 'Empty',
@@ -762,7 +806,7 @@ function Workspace({ scope: passedScope }: { scope: ActiveScope }) {
           <div>
             <h2 className='font-semibold'>
               {selected
-                ? 'Inspecting historical sample'
+                ? 'Pinned sample inspection'
                 : saved
                   ? 'Saved sample inspection'
                   : 'Current sample inspection'}
@@ -772,7 +816,7 @@ function Workspace({ scope: passedScope }: { scope: ActiveScope }) {
                 ? `#${inspected.id} · ${time(inspected.received_at)} · ${inspected.quality}`
                 : 'No sample yet'}
               {selected && !saved
-                ? ' · summary above remains live'
+                ? ' · summary above remains live; inspect latest to update these rows'
                 : ''}
             </p>
           </div>
@@ -894,6 +938,7 @@ function Workspace({ scope: passedScope }: { scope: ActiveScope }) {
                   {number(inspected?.connections)} members
                 </p>
                 <p>Route: {inspected?.endpoint ?? '—'}</p>
+                <p>Polling mode: {pollingLabel(saved?.interval ?? status?.interval ?? interval)}</p>
               </div>
               <div className='space-y-2 rounded-lg border p-3'>
                 <h3 className='font-medium'>Interpretation limits</h3>
@@ -949,9 +994,9 @@ function Workspace({ scope: passedScope }: { scope: ActiveScope }) {
                       <th className='p-2'>
                         {tab === 'clients' ? 'Client' : 'Destination'}
                       </th>
-                      <th className='p-2'>Observed members</th>
-                      <th className='p-2'>Primary members</th>
-                      <th className='p-2'>Active client legs</th>
+                      <th className='p-2'><TooltipOne content='Connections observed for this client or destination in this snapshot, including Primary and Secondary members.' classNameContent='max-w-72'><button type='button' className='rounded underline decoration-dotted underline-offset-4 focus-visible:ring-2 focus-visible:ring-ring'>Connections observed</button></TooltipOne></th>
+                      <th className='p-2'><TooltipOne content='Primary connections for this client or destination in this snapshot; a subset of Connections observed.' classNameContent='max-w-72'><button type='button' className='rounded underline decoration-dotted underline-offset-4 focus-visible:ring-2 focus-visible:ring-ring'>Primary connections</button></TooltipOne></th>
+                      <th className='p-2'><TooltipOne content='Connections with the client-side Active flag in this snapshot. This does not describe the whole connection. Counts overlap with Primary connections; do not add these totals.' classNameContent='max-w-72'><button type='button' className='rounded underline decoration-dotted underline-offset-4 focus-visible:ring-2 focus-visible:ring-ring'>Client-side active</button></TooltipOne></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1067,9 +1112,7 @@ function Workspace({ scope: passedScope }: { scope: ActiveScope }) {
                           {display(row.server_active)}
                         </td>
                         <td className='p-2 tabular-nums text-xs'>
-                          {row.duration == null
-                            ? '—'
-                            : `${number(row.duration)} s`}
+                          {formatDuration(row.duration)}
                         </td>
                         <td className='p-2'>
                           <Button
@@ -1098,15 +1141,20 @@ function Workspace({ scope: passedScope }: { scope: ActiveScope }) {
             </p>
           )}
           <div
-            className='mt-3 flex items-center justify-between gap-2 text-xs text-muted-foreground'
+            className='mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground'
             aria-live='polite'
           >
             <span>
               {rows.busy
                 ? 'Reading indexed page…'
-                : `${number(rows.data?.total ?? 0)} matches · page ${page + 1}`}
+                : `${rows.data?.total ? number(page * pageSize + 1) : 0}–${number(Math.min((page + 1) * pageSize, rows.data?.total ?? 0))} of ${number(rows.data?.total ?? 0)} · Page ${page + 1} of ${Math.max(1, Math.ceil((rows.data?.total ?? 0) / pageSize))}`}
             </span>
-            <div className='flex gap-2'>
+            <div className='flex flex-wrap items-center gap-2'>
+              <label className='flex items-center gap-2'>Rows per page
+                <select aria-label='Rows per page' className={INPUT} value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))}>
+                  {[10, 20, 30, 50].map((size) => <option key={size} value={size}>{size}</option>)}
+                </select>
+              </label>
               <Button
                 size='sm'
                 variant='outline'
@@ -1120,7 +1168,7 @@ function Workspace({ scope: passedScope }: { scope: ActiveScope }) {
                 variant='outline'
                 disabled={
                   rows.busy ||
-                  (page + 1) * 50 >= (rows.data?.total ?? 0)
+                  (page + 1) * pageSize >= (rows.data?.total ?? 0)
                 }
                 onClick={() => setPage((v) => v + 1)}
               >
@@ -1130,7 +1178,7 @@ function Workspace({ scope: passedScope }: { scope: ActiveScope }) {
           </div>
         </Tabs.Root>
       </Card>
-      <Dialog open={libraryOpen} onOpenChange={setLibraryOpen}>
+      <Dialog open={visible && libraryOpen} onOpenChange={setLibraryOpen}>
         <DialogContent className='max-h-[85vh] overflow-auto sm:max-w-xl'>
           <DialogTitle>Saved Active Connections</DialogTitle>
           <DialogDescription>
@@ -1162,7 +1210,7 @@ function Workspace({ scope: passedScope }: { scope: ActiveScope }) {
                   {entry.ended
                     ? `Stopped ${time(entry.ended)}`
                     : 'Open capture'}{' '}
-                  · {entry.interval}s · {entry.route}
+                  · {pollingLabel(entry.interval)} · {entry.route}
                 </span>
               </button>
             ))
@@ -1173,7 +1221,7 @@ function Workspace({ scope: passedScope }: { scope: ActiveScope }) {
         </DialogContent>
       </Dialog>
       <Dialog
-        open={!!detailId}
+        open={visible && !!detailId}
         onOpenChange={(open) => {
           if (!open) setDetailId('');
         }}
@@ -1263,7 +1311,8 @@ function ConnectionFields({
                       ? '(missing)'
                       : value === ''
                         ? '(empty string)'
-                        : value}
+                        : key === 'Seconds' && ['Age', 'Duration'].includes(group)
+                          ? formatDuration(Number(value)) : value}
                   </dd>
                 </div>
               );

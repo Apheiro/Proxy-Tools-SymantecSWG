@@ -25,6 +25,7 @@ import {
   useState,
 } from 'react';
 import { toast } from 'sonner';
+import { useDiagnosticsTask } from '@/components/diagnosticsTasks';
 import BackgroundRefresh from '@/components/backgroundRefresh';
 import PageHeader from '@/components/pageHeader';
 import TrafficTimeline from '@/components/trafficTimeline';
@@ -262,6 +263,7 @@ function ScopedTrafficAnalysisWorkspace({
   const active =
     mode === 'live' &&
     ['connecting', 'streaming'].includes(stream?.status ?? '');
+  useDiagnosticsTask(proxy, 'TrafficAnalysis', active ? `Traffic Analysis ${stream?.status === 'connecting' ? 'connecting' : 'live'}` : capture.busy ? 'Traffic Analysis processing' : null);
   const captureId =
     capture.dataset?.captureId ?? stream?.captureId ?? '';
   useEffect(
@@ -448,7 +450,7 @@ function ScopedTrafficAnalysisWorkspace({
   const loadIndex = useCallback(() => {
     void credentialRevision;
     void indexVersion; // Explicit Refresh reruns the same scoped cache entry.
-    const credentials = getCredentials();
+    const credentials = sourceMode === 'live' ? getCredentials() : null;
     return invoke<AccessLogSource[]>('get_traffic_access_logs', {
       proxyIp: proxy,
       username:
@@ -536,7 +538,7 @@ function ScopedTrafficAnalysisWorkspace({
           ),
         );
         if (cancelled) return;
-        const credentials = getCredentials();
+        const credentials = sourceMode === 'live' ? getCredentials() : null;
         createdCapture = await invoke<string>(
           'start_traffic_stream',
           {

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 /** Match Traffic Analysis's density navigator without changing that component. */
 export function useComparisonZoomSlider() {
@@ -44,7 +44,7 @@ export function useComparisonZoomSlider() {
     updatePalette();
     return () => observer.disconnect();
   }, []);
-  return {
+  return useMemo(() => ({
     type: 'slider',
     xAxisIndex: 0,
     left: 0,
@@ -65,5 +65,5 @@ export function useComparisonZoomSlider() {
     realtime: false,
     showDataShadow: false,
     showDetail: false,
-  };
+  }), [palette]);
 }

@@ -1,6 +1,7 @@
 /** biome-ignore-all lint/correctness/useUniqueElementIds: <> */
 import '@/styles/globals.css';
 import { Suspense } from 'react';
+import DiagnosticsHost from '@/components/diagnosticsHost';
 import ActiveConnectionsGuard from '@/components/activeConnectionsGuard';
 import { TooltipProvider } from '@radix-ui/react-tooltip';
 import type { Metadata } from 'next';
@@ -43,7 +44,7 @@ export default function RootLayout({
                       <Navbar />
                       <RouteScrollArea>
                         <TooltipProvider delayDuration={10}>
-                          {children}
+                          <Suspense fallback={null}><DiagnosticsHost>{children}</DiagnosticsHost></Suspense>
                         </TooltipProvider>
                       </RouteScrollArea>
                     </div>

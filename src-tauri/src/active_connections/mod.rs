@@ -23,7 +23,7 @@ use tokio_util::sync::CancellationToken;
 const ROUTES: [&str; 2] = ["/AS/ProxiedConnections/XML", "/AS/Sessions/xml"];
 #[derive(Default)]
 pub struct ActiveConnectionsState {
-    worker: tokio::sync::Mutex<Option<Worker>>,
+    workers: tokio::sync::Mutex<HashMap<String, Worker>>,
     queries: Arc<Mutex<HashMap<String, rusqlite::InterruptHandle>>>,
 }
 struct Worker {
@@ -34,7 +34,9 @@ struct Run {
     id: String,
     scope: String,
     profile: String,
+    proxy: String,
     path: PathBuf,
+    // Zero selects sequential continuous polling, never a zero-duration timer.
     interval: u64,
     stop: CancellationToken,
     poll: Mutex<CancellationToken>,
@@ -96,61 +98,54 @@ async fn end(worker: Worker) {
     worker.run.wake.notify_one();
     let _ = worker.task.await;
 }
-/// App-level scope guard: no polling or database reads, only stop incompatible work.
+/// Profile switches stop incompatible work; navigation never owns a worker.
 #[tauri::command]
 pub async fn ac_guard(
     state: State<'_, ActiveConnectionsState>,
     profile: String,
-    proxy: Option<String>,
 ) -> Result<(), String> {
     if !matches!(profile.as_str(), "live" | "mock") {
         return Err("Invalid profile".into());
     }
-    let selected = proxy
-        .filter(|s| !s.trim().is_empty())
-        .map(|proxy| {
-            Scope {
-                proxy,
-                profile: profile.clone(),
-            }
-            .key()
-        })
-        .transpose();
-    let mut worker = state.worker.lock().await;
-    let selected = match selected {
-        Ok(value) => value,
-        Err(error) => {
-            if let Some(old) = worker.take() {
-                end(old).await;
-            }
-            return Err(error);
-        }
-    };
-    if worker.as_ref().is_some_and(|w| {
-        w.run.profile != profile || selected.as_ref().is_some_and(|key| *key != w.run.scope)
-    }) {
-        if let Some(old) = worker.take() {
-            end(old).await;
-        }
+    let mut workers = state.workers.lock().await;
+    let incompatible: Vec<String> = workers.iter()
+        .filter(|(_, w)| w.run.profile != profile)
+        .map(|(key, _)| key.clone()).collect();
+    for key in incompatible {
+        if let Some(old) = workers.remove(&key) { end(old).await; }
     }
     Ok(())
 }
-/// Attach a workspace; navigating to another selected scope stops the incompatible worker.
 #[tauri::command]
 pub async fn ac_attach(
     state: State<'_, ActiveConnectionsState>,
     scope: Scope,
 ) -> Result<Option<Status>, String> {
-    let key = scope.key()?;
-    let mut worker = state.worker.lock().await;
-    if worker.as_ref().is_some_and(|w| w.run.scope != key) {
-        if let Some(old) = worker.take() {
-            end(old).await;
-        }
+    ac_status(state, scope).await
+}
+#[derive(Serialize)]
+pub struct RunningTask {
+    proxy: String,
+    status: String,
+    interval: u64,
+}
+/// Sanitized inventory: no credentials, XML, or cross-profile results.
+#[tauri::command]
+pub async fn ac_list_running(
+    state: State<'_, ActiveConnectionsState>,
+    profile: String,
+) -> Result<Vec<RunningTask>, String> {
+    if !matches!(profile.as_str(), "live" | "mock") {
+        return Err("Invalid profile".into());
     }
-    Ok(worker
-        .as_ref()
-        .map(|w| w.run.status.lock().unwrap().clone()))
+    let workers = state.workers.lock().await;
+    Ok(workers.values().filter_map(|w| {
+        let status = w.run.status.lock().unwrap();
+        (w.run.profile == profile && !w.task.is_finished()
+            && !w.run.stop.is_cancelled() && !w.run.paused.load(Ordering::SeqCst)
+            && matches!(status.state.as_str(), "Running" | "Backoff"))
+            .then(|| RunningTask { proxy: w.run.proxy.clone(), status: status.state.clone(), interval: w.run.interval })
+    }).collect())
 }
 #[tauri::command]
 pub async fn ac_start(
@@ -162,12 +157,12 @@ pub async fn ac_start(
     interval: u64,
 ) -> Result<Status, String> {
     let key = scope.key()?;
-    if !matches!(interval, 5 | 10 | 30 | 60) {
-        return Err("Choose 5, 10, 30 or 60 seconds".into());
+    if !matches!(interval, 0 | 5 | 10 | 30 | 60) {
+        return Err("Choose Continuous, 5, 10, 30 or 60 seconds".into());
     }
     let base = crate::proxy_base_url(&scope.proxy)?;
-    let mut worker = state.worker.lock().await;
-    if let Some(old) = worker.take() {
+    let mut workers = state.workers.lock().await;
+    if let Some(old) = workers.remove(&key) {
         end(old).await;
     }
     let id = hash(&format!(
@@ -192,8 +187,9 @@ pub async fn ac_start(
     };
     let run = Arc::new(Run {
         id,
-        scope: key,
+        scope: key.clone(),
         profile: scope.profile.clone(),
+        proxy: scope.proxy.clone(),
         path,
         interval,
         stop: CancellationToken::new(),
@@ -215,7 +211,7 @@ pub async fn ac_start(
     let task = tokio::spawn(async move {
         poll_loop(r, base, mocked).await;
     });
-    *worker = Some(Worker { run, task });
+    workers.insert(key, Worker { run, task });
     Ok(status)
 }
 #[tauri::command]
@@ -228,10 +224,10 @@ pub async fn ac_control(
     password: Option<String>,
 ) -> Result<Status, String> {
     let key = scope.key()?;
-    let worker = state.worker.lock().await;
-    let run = &worker
-        .as_ref()
-        .filter(|w| w.run.scope == key && w.run.id == id)
+    let workers = state.workers.lock().await;
+    let run = &workers
+        .get(&key)
+        .filter(|w| w.run.id == id)
         .ok_or("No matching running capture")?
         .run;
     if run.stop.is_cancelled() && action != "stop" {
@@ -282,10 +278,9 @@ pub async fn ac_status(
     scope: Scope,
 ) -> Result<Option<Status>, String> {
     let key = scope.key()?;
-    let worker = state.worker.lock().await;
-    Ok(worker
-        .as_ref()
-        .filter(|w| w.run.scope == key)
+    let workers = state.workers.lock().await;
+    Ok(workers
+        .get(&key)
         .map(|w| w.run.status.lock().unwrap().clone()))
 }
 #[tauri::command]
@@ -391,12 +386,12 @@ impl Failure {
         }
     }
 }
-async fn fetch(
+async fn fetch_document(
     base: &reqwest::Url,
     route: usize,
     user: &str,
     pass: &str,
-) -> Result<(Parsed, String, usize), Failure> {
+) -> Result<(String, usize), Failure> {
     let url = base
         .join(ROUTES[route])
         .map_err(|_| Failure::new("Invalid fixed management route", false))?;
@@ -441,6 +436,22 @@ async fn fetch(
     let xml =
         String::from_utf8(bytes).map_err(|_| Failure::new("Response is not UTF-8 XML", true))?;
     crate::proxy_transport::check_document(&xml,&url,user,pass,false).map_err(|_|Failure::auth("Authentication error: management returned a login form instead of XML. Resume explicitly after checking credentials."))?;
+    Ok((xml, len))
+}
+async fn fetch(
+    base: &reqwest::Url,
+    route: usize,
+    user: &str,
+    pass: &str,
+    cancellation: &CancellationToken,
+) -> Result<(Parsed, String, usize), Failure> {
+    let (xml, len) = tokio::select! {
+        _ = cancellation.cancelled() => return Err(Failure::new("Poll cancelled", false)),
+        result = tokio::time::timeout(Duration::from_secs(30), fetch_document(base, route, user, pass)) =>
+            result.map_err(|_| Failure::new("Poll timed out; missing sample", true))??,
+    };
+    // Always join an already-started parse before another fetch can begin.
+    // Cancellation discards its result below instead of detaching CPU work.
     // Parsing is CPU work outside Tokio's executor. Raw XML never crosses IPC.
     tokio::task::spawn_blocking(move || {
         let digest = hash(&xml);
@@ -471,7 +482,11 @@ async fn poll_loop(run: Arc<Run>, base: reqwest::Url, mocked: bool) {
             let delay = if run.paused.load(Ordering::SeqCst) {
                 Duration::from_secs(86400)
             } else {
-                Duration::from_secs((run.interval * 2u64.pow(failures.min(4))).min(120))
+                if failures == 0 && run.interval == 0 {
+                    Duration::from_millis(350)
+                } else {
+                    Duration::from_secs((run.interval.max(1) * 2u64.pow(failures.min(4))).min(120))
+                }
             };
             tokio::select! { _=run.stop.cancelled()=>break, _=run.wake.notified()=>{}, _=tokio::time::sleep(delay)=>{} }
         }
@@ -504,7 +519,7 @@ async fn poll_loop(run: Arc<Run>, base: reqwest::Url, mocked: bool) {
         if run.paused.load(Ordering::SeqCst) && !refresh {
             continue;
         }
-        let cancellation = CancellationToken::new();
+        let cancellation = run.stop.child_token();
         {
             let mut active_poll = run.poll.lock().unwrap();
             *active_poll = cancellation.clone();
@@ -519,28 +534,26 @@ async fn poll_loop(run: Arc<Run>, base: reqwest::Url, mocked: bool) {
         }
         let (user, pass) = run.credentials.lock().unwrap().clone();
         let started = Instant::now();
-        let result = tokio::select! {
-            _=run.stop.cancelled()=>break,
-            _=cancellation.cancelled()=>continue,
-            value=tokio::time::timeout(Duration::from_secs(30),async {
+        let result = async {
                 if mocked {
                     if tick % 12 == 6 { return Err(Failure::new("Synthetic missing poll: fixture gap (no zero concurrency inferred)",false)); }
                     let xml=if tick % 20 == 10 {mock::empty()}else{mock::xml(tick)}; let len=xml.len(); let digest=hash(&xml);
                     return parser::parse(&xml).map(|p|(p,digest,len)).map_err(|e|Failure::new(&e,false));
                 }
-                match fetch(&base,route,&user,&pass).await {
+                match fetch(&base,route,&user,&pass,&cancellation).await {
                     Ok(value)=>Ok(value),
                     Err(first) if first.fallback=>{
                         let alternate=1-route;
-                        match fetch(&base,alternate,&user,&pass).await {
+                        match fetch(&base,alternate,&user,&pass,&cancellation).await {
                             Ok((p,digest,len))=>{route=alternate;Ok((p,digest,len+first.bytes))},
                             Err(second)=>Err(Failure{message:format!("Both XML routes failed. {}",second.message),..second})
                         }
                     }
                     Err(error)=>Err(error)
                 }
-            })=>value.unwrap_or_else(|_|Err(Failure::new("Poll timed out; missing sample",false)))
-        };
+        }.await;
+        if run.stop.is_cancelled() { break; }
+        if cancellation.is_cancelled() { continue; }
         tick += 1;
         let mut sample = Snapshot {
             received_at: chrono::Utc::now().timestamp_millis(),
@@ -608,5 +621,6 @@ async fn poll_loop(run: Arc<Run>, base: reqwest::Url, mocked: bool) {
     let path = run.path.clone();
     let scope = run.scope.clone();
     let _ = tokio::task::spawn_blocking(move || store::finish(&path, &scope)).await;
+    *run.credentials.lock().unwrap() = (String::new(), String::new());
     run.status.lock().unwrap().state = "Stopped".into();
 }

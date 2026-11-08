@@ -96,15 +96,17 @@ export function useActiveQuery<T>(
   scope: ActiveScope,
   id: string,
   query: MonitorQuery,
+  retainTimeline = false,
 ) {
-  const [result, setResult] = useState<{ key: string; value: T } | null>(null);
+  const [result, setResult] = useState<{ key: string; owner: string; value: T } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const encoded = JSON.stringify(query);
   const requestKey = JSON.stringify([scope.proxy, scope.profile, id, encoded]);
-  const data = result?.key === requestKey ? result.value : null;
+  const owner = JSON.stringify([scope.proxy, scope.profile, id, query.kind, query.offset, query.before]);
+  const data = result?.key === requestKey || (retainTimeline && result?.owner === owner)
+    ? result?.value ?? null : null;
   useEffect(() => {
-    setResult(null);
     setError('');
     if (!id) {
       setBusy(false);
@@ -120,7 +122,7 @@ export function useActiveQuery<T>(
       query: JSON.parse(encoded),
     })
       .then((value) => {
-        if (current) setResult({ key: requestKey, value });
+        if (current) setResult({ key: requestKey, owner, value });
       })
       .catch((reason) => {
         if (current) setError(String(reason));
@@ -134,7 +136,7 @@ export function useActiveQuery<T>(
         () => undefined,
       );
     };
-  }, [scope, id, encoded, requestKey]);
+  }, [scope, id, encoded, requestKey, owner]);
   return { data, busy, error };
 }
 export function xmlValue(
@@ -195,3 +197,20 @@ export const XML_FIELDS: Record<string, string[]> = {
   Acceleration: ['ObjectCache', 'Latency', 'BandwidthManagement'],
   Details: ['Subsystem', 'Error', 'Text'],
 };
+
+/** Human-readable seconds without truncating days or losing subsecond values. */
+export function formatDuration(seconds: number | null | undefined): string {
+  if (seconds == null || !Number.isFinite(seconds) || seconds < 0) return '—';
+  let remaining = seconds < Number.MAX_SAFE_INTEGER / 1e9 ? Math.round(seconds * 1e9) / 1e9 : seconds;
+  const parts: string[] = [];
+  for (const [size, unit] of [[86400, 'd'], [3600, 'h'], [60, 'm']] as const) {
+    const count = Math.floor(remaining / size);
+    if (count) parts.push(`${count.toLocaleString()}${unit}`);
+    remaining %= size;
+  }
+  // Suppress floating point subtraction noise, retaining nanosecond precision.
+  const rest = Math.round(remaining * 1e9) / 1e9;
+  if (rest || !parts.length) parts.push(`${rest.toLocaleString(undefined, { maximumFractionDigits: 9 })}s`);
+  return parts.join(' ');
+}
+export const pollingLabel = (interval: number) => interval === 0 ? 'Continuous (350 ms safety delay)' : `Every ${interval} seconds`;

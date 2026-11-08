@@ -16,6 +16,7 @@ import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
+import { useDiagnosticsTask, useDiagnosticsVisible } from '@/components/diagnosticsTasks';
 import PageHeader from '@/components/pageHeader';
 import { TimeZonePicker } from '@/components/ui/time-zone-picker';
 import { Button } from '@/components/ui/button';
@@ -160,6 +161,8 @@ function Workspace({
   scope: TrafficCaptureScope;
 }) {
   const { htmlPdfReports } = useAppPreferences();
+  const visible = useDiagnosticsVisible();
+  const [sourcesOpen, setSourcesOpen] = useState(false);
   const [archives, setArchives] = useState<CaptureArchive[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
   const [unassigned, setUnassigned] = useState(false);
@@ -211,6 +214,8 @@ function Workspace({
     null,
   );
   const [busy, setBusy] = useState(false);
+  const [executing, setExecuting] = useState(false);
+  useDiagnosticsTask(proxy, 'ComparativeReports', executing ? 'Comparative Reports running' : null);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState('');
   const pending = useRef<string | null>(null);
@@ -273,6 +278,7 @@ function Workspace({
     }
     generation.current++;
     setBusy(false);
+    setExecuting(false);
     if (pending.current) {
       void invoke('cancel_traffic_comparison', {
         requestId: pending.current,
@@ -299,6 +305,7 @@ function Workspace({
     const current = ++generation.current;
     const requestId = crypto.randomUUID();
     pending.current = requestId;
+    setExecuting(true);
     setBusy(true);
     setError('');
     try {
@@ -449,6 +456,7 @@ function Workspace({
     } finally {
       if (current === generation.current) {
         pending.current = null;
+        setExecuting(false);
         setBusy(false);
       }
     }
@@ -639,7 +647,7 @@ function Workspace({
               {unassigned ? ' · Unassigned sources' : ` · ${proxy}`}
             </p>
           </div>
-          <Popover>
+          <Popover open={visible && sourcesOpen} onOpenChange={setSourcesOpen}>
             <PopoverTrigger asChild>
               <Button
                 variant='outline'
@@ -811,7 +819,7 @@ function Workspace({
                 />
               </div>
             )}
-            <Popover open={dateOpen} onOpenChange={setDateOpen}>
+            <Popover open={visible && dateOpen} onOpenChange={setDateOpen}>
               <PopoverTrigger asChild>
                 <Button size='sm' variant='ghost'>
                   {dateFrom || dateTo
