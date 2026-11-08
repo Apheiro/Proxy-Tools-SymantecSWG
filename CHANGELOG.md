@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.1](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/compare/v0.12.0...v0.12.1) (2026-11-08)
+
+
+### Bug Fixes
+
+* **diagnostics:** preserve live monitoring across workspaces ([0dd65b1](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/commit/0dd65b16e0b186d3463e5fe5fd173bb40d54fcc5))
+
 ## [0.12.0](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/compare/v0.11.0...v0.12.0) (2026-11-06)
 
 
