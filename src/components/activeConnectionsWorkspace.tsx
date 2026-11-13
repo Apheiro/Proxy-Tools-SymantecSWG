@@ -427,21 +427,18 @@ function Workspace({ scope: passedScope }: { scope: ActiveScope }) {
       id: key,
       name: i === 0 ? 'Proxied Sessions' : 'Proxied Connections',
       type: 'line',
-      connectNulls: false,
+      connectNulls: true,
       showSymbol: samples.length < 80,
       symbolSize: 7,
       lineStyle: { width: 2 },
-      data: samples.flatMap((s, index) => {
-        const previous = samples[index - 1];
-        const intervalMs =
-          Math.max(1, saved?.interval ?? status?.interval ?? interval) * 1000;
-        return previous &&
-          s.received_at - previous.received_at > intervalMs * 2.5
-          ? [
-              [previous.received_at + intervalMs, null, -1],
-              [s.received_at, s[key], s.id],
-            ]
-          : [[s.received_at, s[key], s.id]];
+      // Connect valid observations directly across failures and elapsed time.
+      // Keep their original timestamps and IDs; never invent a measurement.
+      data: samples.flatMap((s) => {
+        const value = s[key];
+        return (s.quality === 'OK' || s.quality === 'Empty') &&
+          typeof value === 'number' && Number.isFinite(value)
+          ? [[s.received_at, value, s.id]]
+          : [];
       }),
       markLine: { data: [] },
       ...(i === 0 &&

@@ -6,6 +6,8 @@ mod store;
 use parser::{hash, Parsed};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
+use std::io::{self, Read};
 use std::{
     collections::HashMap,
     path::PathBuf,
@@ -386,11 +388,70 @@ impl Failure {
         }
     }
 }
+// Two queued 64 KiB blocks provide backpressure; no raw XML file or full body buffer.
+struct DocumentStream {
+    receiver: tokio::sync::mpsc::Receiver<Vec<u8>>,
+    current: std::io::Cursor<Vec<u8>>,
+}
+impl Read for DocumentStream {
+    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+        if out.is_empty() {
+            return Ok(0);
+        }
+        loop {
+            let n = self.current.read(out)?;
+            if n != 0 {
+                return Ok(n);
+            }
+            match self.receiver.blocking_recv() {
+                Some(chunk) => self.current = std::io::Cursor::new(chunk),
+                None => return Ok(0),
+            }
+        }
+    }
+}
+
+// Apply the existing login-form detector to complete forms anywhere in the stream,
+// including HTML that quick-xml rejects. Retain only one bounded, unfinished form.
+#[derive(Default)]
+struct LoginProbe {
+    pending: Vec<u8>,
+}
+impl LoginProbe {
+    fn check(&mut self, chunk: &[u8], url: &reqwest::Url, user: &str, pass: &str) -> Result<(), Failure> {
+        use std::sync::LazyLock;
+        static START: LazyLock<regex::bytes::Regex> = LazyLock::new(|| regex::bytes::Regex::new(r"(?i)<form\b").unwrap());
+        static END: LazyLock<regex::bytes::Regex> = LazyLock::new(|| regex::bytes::Regex::new(r"(?i)</form\s*>").unwrap());
+        self.pending.extend_from_slice(chunk);
+        loop {
+            let Some(start) = START.find(&self.pending) else {
+                // Preserve a possible opening tag split across network chunks.
+                let keep = self.pending.len().saturating_sub(6);
+                self.pending.drain(..keep);
+                return Ok(());
+            };
+            if start.start() != 0 {
+                self.pending.drain(..start.start());
+            }
+            let Some(end) = END.find(&self.pending).map(|m| m.end()) else {
+                if self.pending.len() > 512 * 1024 {
+                    return Err(Failure::new("Management form exceeds 512 KiB inspection limit", false));
+                }
+                return Ok(());
+            };
+            crate::proxy_transport::check_document(&String::from_utf8_lossy(&self.pending[..end]), url, user, pass, false)
+                .map_err(|_| Failure::auth("Authentication error: management returned a login form instead of XML. Resume explicitly after checking credentials."))?;
+            self.pending.drain(..end);
+        }
+    }
+}
+
 async fn fetch_document(
     base: &reqwest::Url,
     route: usize,
     user: &str,
     pass: &str,
+    sender: tokio::sync::mpsc::Sender<Vec<u8>>,
 ) -> Result<(String, usize), Failure> {
     let url = base
         .join(ROUTES[route])
@@ -415,28 +476,30 @@ async fn fetch_document(
             matches!(status, 404 | 405 | 410 | 501),
         ));
     }
-    if response
-        .content_length()
-        .is_some_and(|n| n > 16 * 1024 * 1024)
-    {
-        return Err(Failure::new("Response exceeds 16 MiB limit", false));
+    if response.content_length().is_some_and(|n| n > parser::MAX_DOCUMENT_BYTES as u64) {
+        return Err(Failure::new("Response exceeds 256 MiB document limit", false));
     }
-    let mut bytes = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
-        .await
+    let mut len = 0usize;
+    let mut digest = Sha256::new();
+    let mut login = LoginProbe::default();
+    let mut parser_closed = false;
+    while let Some(chunk) = response.chunk().await
         .map_err(|_| Failure::new("Response body interrupted", true))?
     {
-        if bytes.len() + chunk.len() > 16 * 1024 * 1024 {
-            return Err(Failure::new("Response exceeds 16 MiB limit", false));
+        // Enforce the decoded-body limit even with absent/incorrect Content-Length or gzip.
+        len = len.checked_add(chunk.len())
+            .filter(|n| *n <= parser::MAX_DOCUMENT_BYTES)
+            .ok_or_else(|| Failure::new("Response exceeds 256 MiB document limit", false))?;
+        digest.update(&chunk);
+        for block in chunk.chunks(64 * 1024) {
+            login.check(block, &url, user, pass)?;
+            // Still inspect HTML for authentication if the XML parser has rejected it.
+            if !parser_closed && sender.send(block.to_vec()).await.is_err() {
+                parser_closed = true;
+            }
         }
-        bytes.extend_from_slice(&chunk);
     }
-    let len = bytes.len();
-    let xml =
-        String::from_utf8(bytes).map_err(|_| Failure::new("Response is not UTF-8 XML", true))?;
-    crate::proxy_transport::check_document(&xml,&url,user,pass,false).map_err(|_|Failure::auth("Authentication error: management returned a login form instead of XML. Resume explicitly after checking credentials."))?;
-    Ok((xml, len))
+    Ok((format!("{:x}", digest.finalize()), len))
 }
 async fn fetch(
     base: &reqwest::Url,
@@ -445,28 +508,90 @@ async fn fetch(
     pass: &str,
     cancellation: &CancellationToken,
 ) -> Result<(Parsed, String, usize), Failure> {
-    let (xml, len) = tokio::select! {
-        _ = cancellation.cancelled() => return Err(Failure::new("Poll cancelled", false)),
-        result = tokio::time::timeout(Duration::from_secs(30), fetch_document(base, route, user, pass)) =>
-            result.map_err(|_| Failure::new("Poll timed out; missing sample", true))??,
+    let (sender, receiver) = tokio::sync::mpsc::channel(2);
+    let parse_cancellation = cancellation.clone();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let task = tokio::task::spawn_blocking(move || {
+        parser::parse_reader_controlled(DocumentStream {
+            receiver,
+            current: std::io::Cursor::new(Vec::new()),
+        }, || parse_cancellation.is_cancelled() || Instant::now() >= deadline)
+    });
+    let document = tokio::select! {
+        _ = cancellation.cancelled() => Err(Failure::new("Poll cancelled", false)),
+        result = tokio::time::timeout(Duration::from_secs(30), fetch_document(base, route, user, pass, sender)) =>
+            result.unwrap_or_else(|_| Err(Failure::new("Poll timed out; missing sample", true))),
     };
-    // Always join an already-started parse before another fetch can begin.
-    // Cancellation discards its result below instead of detaching CPU work.
-    // Parsing is CPU work outside Tokio's executor. Raw XML never crosses IPC.
-    tokio::task::spawn_blocking(move || {
-        let digest = hash(&xml);
-        parser::parse(&xml)
-            .map(|p| (p, digest, len))
-            .map_err(|e| Failure {
-                message: e,
-                fallback: true,
-                auth: false,
-                bytes: len,
-            })
+    // Dropping the fetch future closes the channel. Always join the parser, including
+    // timeout/cancellation/error paths, before fallback or the next poll can start.
+    let parsed = task.await.map_err(|_| Failure::new("XML parsing interrupted", false));
+    let (digest, len) = document?;
+    parsed?.map(|p| (p, digest, len)).map_err(|message| Failure {
+        message,
+        fallback: true,
+        auth: false,
+        bytes: len,
     })
-    .await
-    .map_err(|_| Failure::new("XML parsing interrupted", false))?
 }
+
+#[cfg(test)]
+mod stream_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn fragmented_stream_preserves_utf8_and_all_members() {
+        let (sender, receiver) = tokio::sync::mpsc::channel(2);
+        let xml = mock::xml(0).replace("Synthetic service", "Serviço");
+        let task = tokio::task::spawn_blocking(move || {
+            parser::parse_reader(DocumentStream {
+                receiver,
+                current: std::io::Cursor::new(Vec::new()),
+            })
+        });
+        // Split even multi-byte UTF-8 characters across reads.
+        for byte in xml.bytes() {
+            assert!(sender.send(vec![byte]).await.is_ok());
+        }
+        drop(sender);
+        let parsed = task.await.unwrap().unwrap();
+        assert_eq!(parsed.members.len(), 4);
+        assert_eq!(parsed.members[0].raw.field("Service", "Name"), Some("Serviço"));
+    }
+
+    #[tokio::test]
+    async fn interrupted_stream_is_joined_without_a_partial_snapshot() {
+        let (sender, receiver) = tokio::sync::mpsc::channel(2);
+        let task = tokio::task::spawn_blocking(move || {
+            parser::parse_reader(DocumentStream {
+                receiver,
+                current: std::io::Cursor::new(Vec::new()),
+            })
+        });
+        assert!(sender.send(b"<BlueCoatResponse><Device>".to_vec()).await.is_ok());
+        // As on timeout/cancellation, dropping the producer unblocks the parser.
+        drop(sender);
+        let result = tokio::time::timeout(Duration::from_secs(2), task).await;
+        assert!(result.unwrap().unwrap().is_err());
+    }
+
+    #[test]
+    fn login_detection_survives_chunk_boundaries_and_leading_content() {
+        let url = reqwest::Url::parse("https://192.0.2.1/AS/ProxiedConnections/XML").unwrap();
+        let mut probe = LoginProbe::default();
+        for _ in 0..20 {
+            assert!(probe.check(&[b' '; 64 * 1024], &url, "fixture", "fixture").is_ok());
+            assert!(probe.pending.len() <= 6);
+        }
+        let form = b"<FORM method='POST' action='/Secure/Local/console/mc_index.html'><input name='username'><input name='password'></FORM >";
+        for byte in &form[..form.len() - 1] {
+            assert!(probe.check(&[*byte], &url, "fixture", "fixture").is_ok());
+        }
+        let failure = probe.check(&form[form.len() - 1..], &url, "fixture", "fixture").err().unwrap();
+        assert!(failure.auth);
+        assert!(!failure.fallback);
+    }
+}
+
 async fn poll_loop(run: Arc<Run>, base: reqwest::Url, mocked: bool) {
     let mut route = 0usize;
     let mut tick = 0u64;
