@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.2](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/compare/v0.12.1...v0.12.2) (2026-11-13)
+
+
+### Bug Fixes
+
+* **diagnostics:** keep large XML samples and connect timeline points ([7c47b1e](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/commit/7c47b1e8b3f1867e323f319104e13d4abed5cca8))
+
 ## [0.12.1](https://github.com/Apheiro/Proxy-Tools-SymantecSWG/compare/v0.12.0...v0.12.1) (2026-11-08)
 
 
